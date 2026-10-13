@@ -8,6 +8,8 @@ export const LINE = "#ffffff";
 export const MIN_STROKE = 0.8; // 单层出图：最细/最粗线条
 export const MAX_STROKE = 2.8; // 单层里最大的那个区块；要比 HOT_TARGET 低一档
 export const OUTLINE_STROKE = 3.6; // 整体轮廓（与下级同图）
+export const OUTSIDE_STROKE = 1; // 拓展外部轮廓：视图内的同级相邻区域（不参与缩放、不加标签）
+export const OUTSIDE_OPACITY = 0.3;
 export const HOT_TARGET = 3.6; // 查询目标自身（区块形态时）
 export const HOT_ANCESTOR = 2.4; // 图上画到的链路祖先
 export const DEPTH_BASE = 0.55; // 多层出图：所有线条的基准粗细
@@ -32,12 +34,18 @@ export interface RenderInput {
   chain?: string[];
   /** 查询目标 adcode。 */
   target?: string | null;
+  /**
+   * 外部轮廓候选：与「最外层级」同级、落在当前视图内的会以更细更淡的线条画出（不参与缩放，也不加标签）。
+   */
+  outside?: RenderUnit[];
 }
 
 export interface RenderOutput {
   markup: string;
   W: number;
   H: number;
+  /** 实际画出的外部轮廓区块数。 */
+  outside: number;
 }
 
 /**
@@ -54,6 +62,7 @@ export function renderMap({
   captionSub,
   chain = [],
   target = null,
+  outside = [],
 }: RenderInput): RenderOutput | null {
   const sample = units.flatMap((u) => u.rings).flat();
   if (!sample.length) return null;
@@ -167,7 +176,33 @@ export function renderMap({
       .map((r) => "M " + r.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" L ") + " Z")
       .join(" ");
 
-  const out: string[] = [];
+  // 拓展外部轮廓：与最外层级同级、投影后与画布（即当前视图）相交的相邻区域，只描边、不参与缩放/标签。
+  // 相邻区域与本图最外层级共享边界，其投影包围盒必然探进画布，故「有交叠」即「在视图内」。
+  const outsideLayer: string[] = [];
+  for (const u of outside) {
+    const p = project(u);
+    if (!p) continue;
+    let minx = Infinity;
+    let miny = Infinity;
+    let maxx = -Infinity;
+    let maxy = -Infinity;
+    for (const r of p.rings) {
+      for (const [x, y] of r) {
+        if (x < minx) minx = x;
+        if (x > maxx) maxx = x;
+        if (y < miny) miny = y;
+        if (y > maxy) maxy = y;
+      }
+    }
+    if (!(maxx > 0 && minx < W && maxy > 0 && miny < H)) continue; // 完全落在视图外
+    outsideLayer.push(
+      `<path d="${dOf(p.rings)}" fill="none" stroke="${LINE}" ` +
+        `stroke-width="${OUTSIDE_STROKE.toFixed(2)}" stroke-opacity="${OUTSIDE_OPACITY.toFixed(2)}" ` +
+        `stroke-linejoin="round"/>`,
+    );
+  }
+
+  const out: string[] = [...outsideLayer];
   for (const g of geo) {
     out.push(
       `<path d="${dOf(g.rings)}" fill="none" stroke="${LINE}" ` +
@@ -222,7 +257,7 @@ export function renderMap({
     );
   }
 
-  return { markup: out.join("\n"), W, H };
+  return { markup: out.join("\n"), W, H, outside: outsideLayer.length };
 }
 
 /** 给渲染结果套上 `<svg>` 外壳。 */

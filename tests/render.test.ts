@@ -44,6 +44,20 @@ describe("renderMap", () => {
     expect(countPaths(map!.markup)).toBe(3); // 2 个区块 + 1 条轮廓
   });
 
+  it("外部轮廓：只画落在视图内的同级相邻区域，且不加标签", () => {
+    const map = renderMap({
+      units: [unit("杭州市", "330100", 0)],
+      outline: null,
+      outside: [unit("邻区", "330200", 1), unit("远区", "330201", 50)],
+      caption: "杭州市",
+    })!;
+    expect(map.outside).toBe(1); // 只有紧邻的那个在视图内
+    expect(countPaths(map.markup)).toBe(2); // 主区块 + 1 条外部轮廓
+    expect(countLabels(map.markup)).toBe(1); // 外部轮廓不加标签
+    expect(map.markup).not.toContain(">邻区</text>");
+    expect(map.markup).not.toContain(">远区</text>");
+  });
+
   it("captionSub 附加到标题行", () => {
     const map = renderMap({
       units: [unit("临安区", "330112", 0)],

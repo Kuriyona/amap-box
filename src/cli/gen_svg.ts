@@ -17,6 +17,7 @@ const USAGE = `用法: amap-box <行政区名|adcode> [选项]
   --up <N|max>   往上包含几级祖先   (默认 0；max = 一直到国家级)
   --down <0|1>   往下细分几级       (默认 1；0 = 只画目标自身)
   --chain        等价于 --up max
+  --outside      拓展外部轮廓：把「最外层级」同级、落在视图内的相邻区域一并画出（不往下细分）
   --out <dir>    输出目录            (默认 out)
   --cache <dir>  边界+索引缓存目录     (默认 districts)
   --refresh      忽略缓存，重新拉取（含重建全国索引）
@@ -24,11 +25,12 @@ const USAGE = `用法: amap-box <行政区名|adcode> [选项]
 索引: <cache>/index.json 首次运行一次请求生成，之后查找/层级只走它`;
 
 async function main() {
-  const flags: { out: string; cache: string; refresh: boolean; chain: boolean; up?: string; down?: string } = {
+  const flags: { out: string; cache: string; refresh: boolean; chain: boolean; outside: boolean; up?: string; down?: string } = {
     out: "out",
     cache: "districts",
     refresh: false,
     chain: false,
+    outside: false,
   };
   let keyword: string | null = null;
   const argv = process.argv.slice(2);
@@ -39,6 +41,7 @@ async function main() {
     else if (a === "--up") flags.up = argv[++i];
     else if (a === "--down") flags.down = argv[++i];
     else if (a === "--chain") flags.chain = true;
+    else if (a === "--outside") flags.outside = true;
     else if (a === "--refresh") flags.refresh = true;
     else if (a === "-h" || a === "--help") {
       console.log(USAGE);
@@ -89,7 +92,7 @@ async function main() {
 
   let generated;
   try {
-    generated = await box.generate(keyword, { up: upReq, down: downReq, refresh: flags.refresh });
+    generated = await box.generate(keyword, { up: upReq, down: downReq, outside: flags.outside, refresh: flags.refresh });
   } catch (e) {
     console.error(e instanceof Error ? e.message : String(e));
     process.exit(1);
@@ -106,7 +109,7 @@ async function main() {
     console.log(
       `  已写入 ${file}  （往上 ${r.up} 级 / 往下 ${r.down} 级；${r.blocks} 个区块${
         r.outline ? " + 整体轮廓" : ""
-      }）`,
+      }${r.neighbors ? ` + ${r.neighbors} 个外部轮廓` : ""}）`,
     );
     written++;
   }

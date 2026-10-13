@@ -262,7 +262,7 @@ $("#export").onclick = () => {
     for (const it of g.items) {
       L.push("- " + it.k + "  " + it.file + "  （" + it.paths + " 区块 / " + it.labels + " 标签）" +
         (it.landed !== g.name ? "  落到 " + it.landed : ""));
-      if (it.same) L.push("    注：与 " + it.same + " 输出完全相同（down=1 时下级不可绘制，退化为只画自身）");
+      if (it.same) L.push("    注：与 " + it.same + " 输出完全相同（该组合没有额外内容可画：down=1 无下级、或 outside 无同级可补）");
       for (const w of it.warn) L.push("    提示：" + w);
       const t = (text[it.id] || "").trim();
       L.push("    评价：" + (t ? t.replace(/\\n/g, "\\n    ") : "（未评价）"));

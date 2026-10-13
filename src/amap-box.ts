@@ -227,11 +227,12 @@ export class AmapBox {
     down: 0 | 1,
     refresh: boolean,
     shared: string[],
+    outside: boolean,
   ): Promise<GenerateResult> {
     const query = { name: root.name, adcode: root.adcode, level: root.level ?? "" };
     const local: string[] = [];
     const finish = (extra: Partial<GenerateResult> & { up: number; file: string }) =>
-      ({ query, landed: query, down, svg: null, blocks: 0, outline: false, ...extra, notes: [...shared, ...local] }) as GenerateResult;
+      ({ query, landed: query, down, svg: null, blocks: 0, outline: false, neighbors: 0, ...extra, notes: [...shared, ...local] }) as GenerateResult;
 
     // 顺 AMap 的树把目标链拉出来：chain[0] = 国家级 … chain[d] = 目标本身
     const chain = this.#buildChain(root.adcode);
@@ -292,9 +293,26 @@ export class AmapBox {
       units.push({ ...toUnit(self), depth: 0 });
     }
 
+    // 拓展外部轮廓：与「最外层级」R(d-up) 同级的其他行政区（不往下细分），
+    // 边界取回来交给 renderMap，由它只画落在当前视图内的那些。
+    const outsideCandidates: AmapDistrict[] = [];
+    if (outside && d - up >= 1) {
+      const top = chain[d - up].region;
+      for (const c of chain[d - up - 1].children ?? []) {
+        if (c.adcode === top.adcode || !c.level || !DRAWABLE[c.level]) continue;
+        outsideCandidates.push(c);
+      }
+    }
+    const neighbors: RenderUnit[] = [];
+    for (const c of outsideCandidates) {
+      const full = await this.#fetchRegion(c.adcode, refresh, local);
+      if (full?.polyline) neighbors.push({ ...toUnit(full), depth: 0 });
+    }
+
     const map = renderMap({
       units,
       outline,
+      outside: neighbors,
       chain: chain.map((n) => n.region.adcode),
       target: landed.adcode,
       caption: landed.name,
@@ -307,6 +325,13 @@ export class AmapBox {
       local.push("没有可绘制的图层");
       return finish({ up, file, landed: landedInfo });
     }
+    if (outside) {
+      local.push(
+        d - up < 1
+          ? "拓展外部轮廓：最外层级已是国家级，没有同级相邻区域"
+          : `拓展外部轮廓：同级候选 ${outsideCandidates.length} 个，视图内绘出 ${map.outside} 个`,
+      );
+    }
     return {
       query,
       landed: landedInfo,
@@ -316,6 +341,7 @@ export class AmapBox {
       svg: wrapSvg(map),
       blocks: units.length,
       outline: !!outline,
+      neighbors: map.outside,
       notes: [...shared, ...local],
     };
   }
@@ -336,7 +362,7 @@ export class AmapBox {
     const out: GenerateResult[] = [];
     for (let i = 0; i < regions.length; i++) {
       // 解析层的提示（索引构建/匹配上限/限流）只挂在第一个结果上，避免多命中时重复
-      out.push(await this.#renderOne(regions[i], upReq, downReq, !!span.refresh, i === 0 ? notes : []));
+      out.push(await this.#renderOne(regions[i], upReq, downReq, !!span.refresh, i === 0 ? notes : [], !!span.outside));
     }
     return out;
   }

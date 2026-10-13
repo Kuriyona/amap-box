@@ -45,6 +45,11 @@ export interface SpanOptions {
   up?: number | "max";
   /** 往下细分几级，只允许 `0 | 1`。默认 `1`。 */
   down?: 0 | 1;
+  /**
+   * 是否拓展外部轮廓：把「最外层级」（`R(d-up)`，如 杭州 u1 / 浙江 u0 都是浙江省）同级的其他
+   * 行政区中，落在当前视图内的那些轮廓也画出来（不往下细分），让图更完整。默认 `false`。
+   */
+  outside?: boolean;
   /** 忽略缓存重新拉取（含重建全国索引）。 */
   refresh?: boolean;
 }
@@ -75,6 +80,8 @@ export interface GenerateResult {
   blocks: number;
   /** 是否有整体轮廓。 */
   outline: boolean;
+  /** 画出的外部轮廓区块数（`outside` 启用且视图内有同级相邻区域时 > 0）。 */
+  neighbors: number;
   /** 这张图的提示/警告。解析层（索引构建、匹配上限、限流）的提示只在第一个结果里出现一次。 */
   notes: string[];
 }

@@ -33,7 +33,11 @@ const INDEX_TREE = node("100000", [
   node("330000", [node("330100", [node("330110", []), node("330111", [])])]),
 ]);
 
-function makeEnv(tree: AmapDistrict = INDEX_TREE, hooks: { onIndex?: () => unknown } = {}) {
+function makeEnv(
+  tree: AmapDistrict = INDEX_TREE,
+  hooks: { onIndex?: () => unknown } = {},
+  polys: Record<string, string> = POLY,
+) {
   const store = new Map<string, string>();
   const calls: string[] = [];
   let indexHits = 0;
@@ -49,7 +53,7 @@ function makeEnv(tree: AmapDistrict = INDEX_TREE, hooks: { onIndex?: () => unkno
       return { status: "1", districts: [tree] };
     }
     if (sub === "1") return { status: "1", districts: [] }; // 在线关键字搜索：查无此名
-    const poly = POLY[kw];
+    const poly = polys[kw];
     return poly
       ? { status: "1", districts: [{ ...NAMES[kw], adcode: kw, center: "120.5,30.5", polyline: poly }] }
       : { status: "0", info: "NO_DATA" };
@@ -171,6 +175,38 @@ describe("generate", () => {
     for (const r of res) expect(r.notes.join("\n")).toContain("乡镇/街道级");
     expect(res[0].notes.join("\n")).toContain("首次运行");
     expect(res[1].notes.join("\n")).not.toContain("首次运行");
+  });
+
+  it("拓展外部轮廓：画视图内的同级相邻区域（不往下细分、不加标签）", async () => {
+    const { box } = makeEnv(INDEX_TREE, {}, {
+      ...POLY,
+      // 富阳区与临安区在视图内有交叠
+      "330111": "119.8,29.8;120.6,29.8;120.6,30.6;119.8,30.6",
+    });
+    const [r] = await box.generate("330110", { up: 0, down: 0, outside: true });
+    expect(r.landed.adcode).toBe("330110");
+    expect(r.blocks).toBe(1); // 只画自身
+    expect(r.neighbors).toBe(1); // 富阳区
+    expect(countPaths(r.svg!)).toBe(2); // 临安区 + 富阳区
+    expect((r.svg!.match(/text-anchor="middle"/g) ?? []).length).toBe(1); // 外部轮廓不加标签
+    expect(r.notes.join("\n")).toContain("同级候选 1 个，视图内绘出 1 个");
+  });
+
+  it("拓展外部轮廓：视图外的同级相邻区域不画", async () => {
+    const { box } = makeEnv(); // 默认富阳区在临安区画布右侧之外
+    const [off] = await box.generate("330110", { up: 0, down: 0, outside: false });
+    expect(off.neighbors).toBe(0);
+    const [on] = await box.generate("330110", { up: 0, down: 0, outside: true });
+    expect(on.neighbors).toBe(0);
+    expect(countPaths(on.svg!)).toBe(1);
+    expect(on.notes.join("\n")).toContain("同级候选 1 个，视图内绘出 0 个");
+  });
+
+  it("拓展外部轮廓：最外层级已是国家级时无同级", async () => {
+    const { box } = makeEnv();
+    const [r] = await box.generate("100000", { up: 0, down: 1, outside: true });
+    expect(r.neighbors).toBe(0);
+    expect(r.notes.join("\n")).toContain("没有同级相邻区域");
   });
 
   it("非法跨度报错", async () => {

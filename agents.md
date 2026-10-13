@@ -40,9 +40,11 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
 
 - **构造参数**（对象形式，只有这三个）：`Key`（string）、`fetch`（`(url) => object`）、`cache`（`{ read(key), write(key, value) }`，read/write 允许同步或返回 Promise）。
 - `resolve(keyword, refresh?)` → `{ regions, notes }`：名称/adcode → 命中的行政区（索引优先，未命中回落在线查询）。
-- `generate(keyword, { up?, down?, refresh? })` → `GenerateResult[]`：每个命中一张图。
+- `generate(keyword, { up?, down?, outside?, refresh? })` → `GenerateResult[]`：每个命中一张图。
   - `up` 默认 `0`（`"max"` = 到国家级，超过目标深度会被夹到深度）；`down` 只允许 `0 | 1`，默认 `1`。
-  - 每项：`query` / `landed`（实际落到的行政区）、`up` / `down`（解析后）、`file`（建议文件名）、`svg`（文本，失败为 `null`）、`blocks`、`outline`、`notes`。
+  - `outside` 默认 `false`：拓展外部轮廓，把「最外层级」（`R(d-up)`，如 杭州 u1 / 浙江 u0 都是浙江省）同级、
+    落在当前视图内的其他行政区轮廓也画出来（更细更淡、不加标签、不往下细分、不改变缩放）。
+  - 每项：`query` / `landed`（实际落到的行政区）、`up` / `down`（解析后）、`file`（建议文件名）、`svg`（文本，失败为 `null`）、`blocks`、`outline`、`neighbors`（画出的外部轮廓区块数）、`notes`。
   - 找不到匹配 → `throw`；某一张画不出来 → 该项 `svg: null` + `notes` 说明，不中断其余。
   - 解析层提示（索引构建、匹配上限、限流重试）只挂在第一个结果上，避免多命中时重复。
 - `ready(refresh?)`：只预热全国索引。
@@ -51,7 +53,7 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
 ## CLI 运行
 
 ```bash
-bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--out <dir>] [--cache <dir>] [--refresh]
+bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outside] [--out <dir>] [--cache <dir>] [--refresh]
 # 或装好之后：amap-box <行政区名|adcode> [选项]
 ```
 
@@ -63,6 +65,7 @@ bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--out <d
 | `--up <N\|max>` | 往上包含几级祖先（`max` = 一直到国家级） | `0` |
 | `--down <0\|1>` | 往下细分几级（`0` = 只画目标自身） | `1` |
 | `--chain` | 等价于 `--up max` | — |
+| `--outside` | 拓展外部轮廓：把「最外层级」同级、视图内的其他行政区轮廓也画出（更细更淡，不往下细分） | — |
 | `--out` / `--cache` | 输出目录 / 边界+索引缓存目录 | `out` / `districts` |
 | `--refresh` | 忽略缓存重新拉取（含重建全国索引） | — |
 
@@ -100,6 +103,10 @@ CLI 的磁盘缓存把键映射成 `<cache>/<key>.json`（键 `index` 与 `<adco
 - 线宽/亮度按**图内相对层级**（最上层 = 0）：单层区块 `0.8~2.8`（按面积）、层级叠图 `0.55+0.35×depth`；
   整体轮廓与下级同图时 `3.6`（多层级时 `2.6`）—— 轮廓只当边框，`up=0` 时它虽是目标也仍是边框
 - 字号**同级统一**，由该级"水平/垂直距离最短的那一对"决定
+- **外部轮廓**（`--outside` / `outside: true`）：把「最外层级」`R(d-up)` 同级的其他行政区中，**投影后与画布相交**
+  （即落在当前视图内）的那些轮廓也画出来，线细（`1.0`）、淡（`opacity 0.3`）、不加标签，也不参与缩放与层级推导；
+  相邻区域与本图最外层共享边界，所以探进视图的邻居会被自然裁到画布边缘，形成"更完整地图"的感觉。
+  `R(d-up)` 已是国家级（如 中国、浙江 u1）时没有同级，无效果。
 
 组合示例（目标 = 杭州市，d=2）：
 
@@ -165,7 +172,7 @@ EOF
 最后一步 —— 出审阅页，人工过一遍全部跨度组合（见「审阅」一节）：
 
 ```bash
-bun src/cli/review.ts   # -> review/ 20 张 + review.html，浏览器打开逐个看/写评语
+bun src/cli/review.ts   # -> review/ 40 张 + review.html，浏览器打开逐个看/写评语
 ```
 
 必须覆盖到的边界行为：
@@ -187,15 +194,16 @@ bun src/cli/review.ts --out review --html review.html --cache districts --refres
 ```
 
 - 每个目标先跑一次 `up=max` 探出它在地级树里的深度 `d`（`up` 会被夹到 `d`，文件名里的 `u<K>` 就是它），
-  再展开 `up ∈ [0..d] × down ∈ {0,1}`。4 个基准目标 = 2+4+6+8 = **20 张**。
+  再展开 `up ∈ [0..d] × down ∈ {0,1} × outside ∈ {off,on}`。4 个基准目标 = 4+8+12+16 = **40 张**
+  （`outside` 变体文件名尾部加 `-o`，不影响库的命名规则）。
 - 出图一律**走 `AmapBox` 本身**，所以缓存/索引/命名与正式出图完全一致，没有第二套逻辑。
-- 产物：`<out>/<名称>-<adcode>-u<K>d<M>.svg` + `<html>`（引用式页面，图片指向 `<out>`，HTML 本身只有 ~17 KB）。
+- 产物：`<out>/<名称>-<adcode>-u<K>d<M>[-o].svg` + `<html>`（引用式页面，图片指向 `<out>`，HTML 本身只有 ~23 KB）。
 - 页面操作：左侧列表点选（`↑`/`↓` 也行）→ 滚轮缩放（改 `<img>` 尺寸的矢量重绘，放到任意倍数都不糊）、
   拖动平移、双击或「适应窗口」复位，另有 `1:1` / `＋` / `－`；每张一个评语框，写进 `localStorage`
   （刷新不丢，`✓ 没问题` 一键填）；「生成返回文本」把全部评语汇成一段自带上下文（目标、跨度、命令、
   文件名、区块/标签数、生成提示）的文本，可复制或存 `.txt`，直接贴回来即可。
-- 页面会标出**逐字节相同**的组合（县级目标的 `down=1` 退化为只画自身）与生成时的提示。
-- `review/` 与 `review.html` 都是可再生产物，随时可删；只有线宽之类不影响计数时，重跑 20 张图后
+- 页面会标出**逐字节相同**的组合（如县级目标 `down=1` 退化为只画自身、`outside` 无同级可补时与不启用一致）与生成时的提示。
+- `review/` 与 `review.html` 都是可再生产物，随时可删；只有线宽之类不影响计数时，重跑 40 张图后
   刷新页面即可（评语仍在），不必重新生成页面。
 
 
@@ -208,6 +216,8 @@ bun src/cli/review.ts --out review --html review.html --cache districts --refres
 - **直辖市是三级**：AMap 的真实树是 `北京市 → 北京城区(110100) → 各区`，所以北京的区目标 `d=3`，`--up max` 会带出 `北京城区` 这一级。
 - **目标可能对不上自身节点**：个别行政区（如 `711113 西湖乡`）在层级树里匹配不到，会退到实际落到的那个行政区（`花莲县`）并打印提示。
 - **`--down` 最多 1**：再往下是几千个区块、几千次请求（接口 QPS 有限，超了返回 `CUQPS_HAS_EXCEEDED_THE_LIMIT`），不现实。
+- **`--outside` 会取回同级的全部候选**：要判断邻居是否落在视图内，必须先拿到它们的边界，所以会额外拉「最外层级」
+  同级的所有行政区（省级最多 34 个）；走缓存，第二次不再请求。
 - **必须抽稀**：国家级边界原始 3.4MB / 2302 个环，34 个省级合计约 15MB。`simplify()`（道格拉斯-普克，0.75px）+ 丢弃小于 2px² 的环是必需的，不是优化。
 - **缓存**：`districts/index.json`（全国索引，首次运行一次请求拿到，见上）+ `districts/<adcode>.json`
   （该区块自身边界，`subdistrict=0`）。`-tree.json` 已废弃 —— 层级链改由索引回答。

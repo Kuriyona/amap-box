@@ -7,7 +7,10 @@
  *
  * 默认目标 = 基准测试的四个层级：中国 / 浙江省 / 杭州市 / 临安区。
  * 每个目标先跑一次 up=max 探出它在层级树里的深度 d（文件名里带），
- * 再展开 up ∈ [0..d] × down ∈ {0,1}（4 个基准目标 = 2+4+6+8 = 20 张）。
+ * 再展开 up ∈ [0..d] × down ∈ {0,1} × outside ∈ {off,on}
+ * （4 个基准目标 = 4+8+12+16 = 40 张）。
+ *
+ * outside 变体在文件名尾部加 `-o`（如 `杭州市-330100-u1d1-o.svg`），与库的命名规则不冲突。
  *
  * 出图全走 `AmapBox` 本身，所以缓存、索引、命名规则都跟正式出图完全一致。
  */
@@ -24,6 +27,7 @@ const USAGE = `用法: amap-box-review [目标...] [选项]
   --html <file>  审阅页              (默认 review.html；图片按 <out> 相对它定位)
   --cache <dir>  边界+索引缓存目录    (默认 districts)
   --refresh      忽略缓存重新出图
+每个目标展开 up ∈ [0..d] × down ∈ {0,1} × outside ∈ {off,on}（outside 变体文件名尾部加 -o）
 不带目标时用基准四个层级: ${DEFAULTS.join(" / ")}`;
 
 async function main() {
@@ -65,26 +69,27 @@ async function main() {
   mkdirSync(flags.out, { recursive: true });
 
   /** 出一次图，落盘并收集审阅项。 */
-  async function gen(target: string, up: number | "max", down: 0 | 1): Promise<Array<PageItem & { hash: string }>> {
+  async function gen(target: string, up: number | "max", down: 0 | 1, outside: boolean): Promise<Array<PageItem & { hash: string }>> {
     const items: Array<PageItem & { hash: string }> = [];
-    for (const r of await box.generate(target, { up, down, refresh: flags.refresh })) {
+    for (const r of await box.generate(target, { up, down, outside, refresh: flags.refresh })) {
       if (!r.svg) continue;
       const info = parseName(r.file);
-      writeFileSync(join(flags.out, r.file), r.svg);
+      const file = outside ? r.file.replace(/\.svg$/, "-o.svg") : r.file;
+      writeFileSync(join(flags.out, file), r.svg);
       items.push({
-        id: `${info.adcode}-u${up}d${down}`,
-        k: `u${up}d${down}`,
-        file: r.file,
+        id: `${info.adcode}-u${up}d${down}${outside ? "-o" : ""}`,
+        k: `u${up}d${down}${outside ? "+o" : ""}`,
+        file,
         landed: info.name,
         paths: (r.svg.match(/<path /g) ?? []).length,
         labels: (r.svg.match(/text-anchor="middle"/g) ?? []).length,
-        cmd: `amap-box ${target} --up ${up} --down ${down}`,
+        cmd: `amap-box ${target} --up ${up} --down ${down}${outside ? " --outside" : ""}`,
         warn: r.notes,
         hash: createHash("sha1").update(r.svg).digest("hex"),
       });
     }
     if (!items.length) {
-      console.error(`没能出图: amap-box ${target} --up ${up} --down ${down}`);
+      console.error(`没能出图: amap-box ${target} --up ${up} --down ${down}${outside ? " --outside" : ""}`);
       process.exit(1);
     }
     return items;
@@ -93,12 +98,14 @@ async function main() {
   const groups: PageGroup[] = [];
   for (const target of targets) {
     // 探深度：up=max 会被夹到目标深度，文件名里的 u<K> 就是 d
-    const d = Math.max(...(await gen(target, "max", 0)).map((p) => parseName(p.file).up));
+    const d = Math.max(...(await gen(target, "max", 0, false)).map((p) => parseName(p.file).up));
     const items: Array<PageItem & { hash: string }> = [];
     for (let up = 0; up <= d; up++) {
-      for (const down of [0, 1] as const) items.push(...(await gen(target, up, down)));
+      for (const down of [0, 1] as const) {
+        for (const outside of [false, true]) items.push(...(await gen(target, up, down, outside)));
+      }
     }
-    // 逐字节相同的组合（县级目标 down=1 退化为只画自身）
+    // 逐字节相同的组合（如县级目标 down=1、或 outside 无同级可补时与不启用时一致）
     const byHash = new Map<string, typeof items>();
     for (const it of items) {
       if (!byHash.has(it.hash)) byHash.set(it.hash, []);
