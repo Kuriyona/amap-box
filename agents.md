@@ -41,7 +41,7 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
 - **构造参数**（对象形式，只有这三个）：`Key`（string）、`fetch`（`(url) => object`）、`cache`（`{ read(key), write(key, value) }`，read/write 允许同步或返回 Promise）。
 - `resolve(keyword, refresh?)` → `{ regions, notes }`：名称/adcode → 命中的行政区（索引优先，未命中回落在线查询）。
 - `generate(keyword, { up?, down?, outside?, ratio?, padding?, title?, refresh? })` → `GenerateResult[]`：每个命中一张图。
-  - `up` 默认 `0`（`"max"` = 到国家级，超过目标深度会被夹到深度）；`down` 只允许 `0 | 1`，默认 `1`。
+  - `up` 默认 `0`（`"max"` = 到国家级，超过目标深度会被夹到深度）；`down` 只允许 `0 | 1`，默认 `0`。
   - `outside` 默认 `false`：拓展外部轮廓，把「最外层级」（`R(d-up)`，如 杭州 u1 / 浙江 u0 都是浙江省）同级、
     落在当前视图内的其他行政区轮廓也画出来（更细更淡、不加标签、不往下细分、不改变缩放）。
   - 版式：`ratio` 默认 `"auto"`（画幅宽高比，可给正数或 `"16:9"`；给定时内容按长边 1000px 缩放后居中，
@@ -65,7 +65,7 @@ bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outsid
 | 选项 | 含义 | 默认 |
 |---|---|---|
 | `--up <N\|max>` | 往上包含几级祖先（`max` = 一直到国家级） | `0` |
-| `--down <0\|1>` | 往下细分几级（`0` = 只画目标自身） | `1` |
+| `--down <0\|1>` | 往下细分几级（`0` = 只画目标自身） | `0` |
 | `--chain` | 等价于 `--up max` | — |
 | `--outside` | 拓展外部轮廓：把「最外层级」同级、视图内的其他行政区轮廓也画出（更细更淡，不往下细分） | — |
 | `--ratio <auto\|W:H\|N>` | 画幅宽高比（`auto` = 按内容；如 `1`、`16:9`） | `auto` |
@@ -120,27 +120,27 @@ CLI 的磁盘缓存把键映射成 `<cache>/<key>.json`（键 `index` 与 `<adco
 
 | 参数 | 画什么 |
 |---|---|
-| `--up 0 --down 1` | 杭州市的 13 个区县（默认） |
+| `--up 0 --down 0` | 只有杭州市轮廓（默认） |
+| `--up 0 --down 1` | 杭州市的 13 个区县 |
 | `--up 1 --down 1` | 浙江省 11 个地级市 + 杭州市 13 个区县，轮廓 = 浙江省 |
 | `--up max --down 1` | 34 省 + 11 市 + 13 区县，轮廓 = 国家级 |
-| `--up 0 --down 0` | 只有杭州市轮廓 |
 
 ## 输出命名
 
 一律 `[名称]-[adcode]-u<K>d<M>.svg`。`adcode` 天然唯一，同名多结果与不同跨度都不会互相覆盖。库只给 `file` 字段，落盘与否交给调用方。
 
-`[名称]-[adcode]` 取**实际落到的那个行政区**，不是查询词本身 —— 街道/乡镇级目标会退到所属区县，例如 `bun src/cli/gen_svg.ts 千岛湖镇` 产出 `淳安县-330127-u0d1.svg`（同时打印提示）。
+`[名称]-[adcode]` 取**实际落到的那个行政区**，不是查询词本身 —— 街道/乡镇级目标会退到所属区县，例如 `bun src/cli/gen_svg.ts 千岛湖镇` 产出 `淳安县-330127-u0d0.svg`（同时打印提示）。
 
 ## 基准测试数据
 
 改动后**先用这 4 个目标跑一遍**：它们正好一一对应 4 个层级。
 
-| 目标 | 级别 | `d` | 默认 `u0d1` | `--up max` |
-|---|---|---|---|---|
-| 中国 | 国家级 | 0 | `中华人民共和国-100000-u0d1.svg`（34 区块 / 31 标签） | 同左（up 已到顶，`u0d1`） |
-| 浙江省 | 省级 | 1 | `浙江省-330000-u0d1.svg`（12 区块 / 11 标签） | `浙江省-330000-u1d1.svg`（45 / 31） |
-| 杭州市 | 地级 | 2 | `杭州市-330100-u0d1.svg`（14 区块 / 13 标签） | `杭州市-330100-u2d1.svg`（58 / 31） |
-| 临安区 | 县级 | 3 | `临安区-330112-u0d1.svg`（1 区块 / 1 标签） | `临安区-330112-u3d1.svg`（58 / 31） |
+| 目标 | 级别 | `d` | 默认 `u0d0` | `--down 1`（`u0d1`） | `--up max --down 1` |
+|---|---|---|---|---|---|
+| 中国 | 国家级 | 0 | `中华人民共和国-100000-u0d0.svg`（1 / 1） | `…-u0d1.svg`（34 / 31） | 同 `u0d1`（up 已到顶） |
+| 浙江省 | 省级 | 1 | `浙江省-330000-u0d0.svg`（1 / 1） | `…-u0d1.svg`（12 / 11） | `…-u1d1.svg`（45 / 31） |
+| 杭州市 | 地级 | 2 | `杭州市-330100-u0d0.svg`（1 / 1） | `…-u0d1.svg`（14 / 13） | `…-u2d1.svg`（58 / 31） |
+| 临安区 | 县级 | 3 | `临安区-330112-u0d0.svg`（1 / 1） | `…-u0d1.svg`（1 / 1） | `…-u3d1.svg`（58 / 31） |
 
 （区块数 = SVG 里 `<path>` 个数，含整体轮廓那一条；标签数 = `<text text-anchor="middle">` 个数。）
 
@@ -150,11 +150,10 @@ CLI 的磁盘缓存把键映射成 `<cache>/<key>.json`（键 `index` 与 `<adco
 bun run test        # 单元测试：几何 / 渲染 / AmapBox（假 fetch + 内存缓存）
 
 rm -rf out
-for r in 中国 浙江省 杭州市 临安区; do bun src/cli/gen_svg.ts "$r"; done
-ls out/          # 期望 4 个 u0d1 文件，文件名与上表一致
-bun src/cli/gen_svg.ts 浙江省 --up max
-bun src/cli/gen_svg.ts 杭州市  --up 1
-bun src/cli/gen_svg.ts 杭州市  --down 0
+for r in 中国 浙江省 杭州市 临安区; do bun src/cli/gen_svg.ts "$r"; done           # 默认 up0/down0
+for r in 中国 浙江省 杭州市 临安区; do bun src/cli/gen_svg.ts "$r" --down 1; done  # 基线
+bun src/cli/gen_svg.ts 浙江省 --up max --down 1
+bun src/cli/gen_svg.ts 杭州市  --up 1 --down 1
 ```
 
 断言（XML 合法 + 区块/标签数）：
@@ -164,6 +163,10 @@ python - <<'EOF'
 import glob, os, xml.etree.ElementTree as ET
 ns = '{http://www.w3.org/2000/svg}'
 want = {
+    '中华人民共和国-100000-u0d0.svg': (1, 1),
+    '浙江省-330000-u0d0.svg':         (1, 1),
+    '杭州市-330100-u0d0.svg':         (1, 1),
+    '临安区-330112-u0d0.svg':         (1, 1),
     '中华人民共和国-100000-u0d1.svg': (34, 31),
     '浙江省-330000-u0d1.svg':         (12, 11),
     '杭州市-330100-u0d1.svg':         (14, 13),

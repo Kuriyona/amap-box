@@ -352,11 +352,11 @@ export class AmapBox {
 
   /**
    * 出图：关键字 -> 每命中一个行政区一张 SVG。
-   * `up` 超过目标深度会被夹到深度（记在 `notes`）；`down` 只允许 `0 | 1`。
+   * `up` 超过目标深度会被夹到深度（记在 `notes`）；`down` 只允许 `0 | 1`（默认 `0`）。
    */
   async generate(keyword: string, span: SpanOptions = {}): Promise<GenerateResult[]> {
     const upReq = span.up ?? 0;
-    const downReq = span.down ?? 1;
+    const downReq = span.down ?? 0;
     if (upReq !== "max" && (!Number.isInteger(upReq) || (upReq as number) < 0))
       throw new Error("up 只接受非负整数或 max");
     if (downReq !== 0 && downReq !== 1) throw new Error("down 只接受 0 或 1（最多往下 1 级）");

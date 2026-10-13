@@ -110,9 +110,20 @@ describe("resolve", () => {
 });
 
 describe("generate", () => {
-  it("默认 up0/down1：只画目标的下级 + 目标轮廓", async () => {
+  it("默认 up0/down0：只画目标自身轮廓", async () => {
     const { box } = makeEnv();
     const [r] = await box.generate("杭州市");
+    expect(r.file).toBe("杭州市-330100-u0d0.svg");
+    expect(r.up).toBe(0);
+    expect(r.down).toBe(0);
+    expect(r.blocks).toBe(1);
+    expect(r.outline).toBe(false);
+    expect(countPaths(r.svg!)).toBe(1);
+  });
+
+  it("down1：只画目标的下级 + 目标轮廓", async () => {
+    const { box } = makeEnv();
+    const [r] = await box.generate("杭州市", { down: 1 });
     expect(r.file).toBe("杭州市-330100-u0d1.svg");
     expect(r.blocks).toBe(2); // 临安区 + 富阳区
     expect(r.outline).toBe(true); // 整体轮廓 = 杭州市自身

@@ -56,7 +56,7 @@ export interface LayoutOptions {
 export interface SpanOptions extends LayoutOptions {
   /** 往上包含几级祖先；`"max"` = 一直到国家级。默认 `0`。 */
   up?: number | "max";
-  /** 往下细分几级，只允许 `0 | 1`。默认 `1`。 */
+  /** 往下细分几级，只允许 `0 | 1`。默认 `0`（只画目标自身）。 */
   down?: 0 | 1;
   /**
    * 是否拓展外部轮廓：把「最外层级」（`R(d-up)`，如 杭州 u1 / 浙江 u0 都是浙江省）同级的其他

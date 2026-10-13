@@ -15,7 +15,7 @@ import { diskCache, loadKey, nodeFetch } from "./common.js";
 const USAGE = `用法: amap-box <行政区名|adcode> [选项]
 选项:
   --up <N|max>   往上包含几级祖先   (默认 0；max = 一直到国家级)
-  --down <0|1>   往下细分几级       (默认 1；0 = 只画目标自身)
+  --down <0|1>   往下细分几级       (默认 0；0 = 只画目标自身，1 = 再画一级下级)
   --chain        等价于 --up max
   --outside      拓展外部轮廓：把「最外层级」同级、落在视图内的相邻区域一并画出（不往下细分）
   --ratio <auto|W:H|N>  画幅宽高比   (默认 auto = 按内容；如 1、16:9)
@@ -89,7 +89,7 @@ async function main() {
       process.exit(2);
     }
   }
-  let downReq: 0 | 1 = 1;
+  let downReq: 0 | 1 = 0;
   if (flags.down !== undefined) {
     const v = String(flags.down).toLowerCase();
     if (v === "0") downReq = 0;
