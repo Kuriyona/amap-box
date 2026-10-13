@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CAPTION_H, PAD, renderMap, wrapSvg, type RenderUnit } from "../src/render.js";
+import { CAPTION_H, DIM_OPACITY, DIM_STROKE, HOT_TARGET, PAD, renderMap, TARGET_FILL, wrapSvg, type RenderUnit } from "../src/render.js";
 
 const square = (x: number, s: number) => [
   [120 + x, 30],
@@ -105,6 +105,56 @@ describe("renderMap", () => {
       captionSub: "浙江省 › 杭州市",
     });
     expect(map!.markup).toContain("浙江省 › 杭州市");
+  });
+
+  it("目标背景：默认给目标节点所在区域填充，可关闭，且不额外增加 path", () => {
+    const on = renderMap({ units: [unit("杭州市", "330100", 0)], outline: null, caption: "T", target: "330100" })!;
+    const off = renderMap({
+      units: [unit("杭州市", "330100", 0)],
+      outline: null,
+      caption: "T",
+      target: "330100",
+      targetBackground: false,
+    })!;
+    expect(on.markup).toContain(`fill="${TARGET_FILL}"`);
+    expect(off.markup).not.toContain(TARGET_FILL);
+    expect(countPaths(on.markup)).toBe(countPaths(off.markup)); // 背景高亮是同一 path 的 fill 属性
+  });
+
+  it("目标背景：目标落到整体轮廓上时填充轮廓区域", () => {
+    const map = renderMap({
+      units: [unit("临安区", "330112", 0), unit("富阳区", "330111", 1)],
+      outline: { name: "杭州市", adcode: "330100", center: [120.5, 30.5], rings: [square(-1, 4)] },
+      caption: "T",
+      target: "330100",
+    })!;
+    // 2 个区块 + 轮廓 = 3 条 path，填充挂在轮廓那条上
+    expect(countPaths(map.markup)).toBe(3);
+    expect((map.markup.match(new RegExp(TARGET_FILL, "g")) ?? []).length).toBe(1);
+  });
+
+  it("上级轮廓高亮：默认把整体轮廓与目标以外的区块压成细灰线，仅目标亮白", () => {
+    const units = [unit("杭州市", "330100", 0), unit("宁波市", "330200", 1)];
+    const outline = { name: "浙江省", adcode: "330000", center: [120.5, 30.5], rings: [square(-1, 4)] };
+    const dim = renderMap({ units, outline, caption: "T", target: "330100", targetBackground: false })!;
+    const hot = renderMap({ units, outline, caption: "T", target: "330100", targetBackground: false, highlightContext: true })!;
+    const dimmed = (m: string) => (m.match(new RegExp(`stroke-opacity="${DIM_OPACITY.toFixed(2)}"`, "g")) ?? []).length;
+    expect(dimmed(dim.markup)).toBe(2); // 宁波市 + 浙江省轮廓
+    expect(dimmed(hot.markup)).toBe(0);
+    expect(dim.markup).toContain(`stroke-width="${DIM_STROKE.toFixed(2)}"`); // 轮廓变细
+    expect(dim.markup).toContain(`stroke-width="${HOT_TARGET.toFixed(2)}"`); // 目标仍亮白
+  });
+
+  it("标签开关：可分开关闭目标节点与上下文标签", () => {
+    const units = [unit("甲市", "1", 0), unit("乙市", "2", 1)];
+    const base = renderMap({ units, outline: null, caption: "T", target: "1" })!;
+    expect(countLabels(base.markup)).toBe(2);
+    const ctxOff = renderMap({ units, outline: null, caption: "T", target: "1", contextLabels: false })!;
+    expect(ctxOff.markup).toContain(">甲市</text>");
+    expect(ctxOff.markup).not.toContain(">乙市</text>");
+    const tgtOff = renderMap({ units, outline: null, caption: "T", target: "1", targetLabels: false })!;
+    expect(tgtOff.markup).not.toContain(">甲市</text>");
+    expect(tgtOff.markup).toContain(">乙市</text>");
   });
 });
 

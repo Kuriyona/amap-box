@@ -11,6 +11,10 @@ export const MAX_STROKE = 2.8; // 单层里最大的那个区块；要比 HOT_TA
 export const OUTLINE_STROKE = 3.6; // 整体轮廓（与下级同图）
 export const OUTSIDE_STROKE = 1; // 拓展外部轮廓：视图内的同级相邻区域（不参与缩放、不加标签）
 export const OUTSIDE_OPACITY = 0.3;
+export const DIM_STROKE = 1; // 未高亮的上下文（整体轮廓 + 目标以外的区块）线宽
+export const DIM_OPACITY = 0.3; // 未高亮的上下文不透明度（在白底/深底上都呈细灰线）
+export const TARGET_FILL = "#1f6feb"; // 目标节点所在区域的背景高亮色
+export const TARGET_FILL_OPACITY = 0.22; // 背景高亮不透明度
 export const HOT_TARGET = 3.6; // 查询目标自身（区块形态时）
 export const HOT_ANCESTOR = 2.4; // 图上画到的链路祖先
 export const DEPTH_BASE = 0.55; // 多层出图：所有线条的基准粗细
@@ -56,6 +60,17 @@ export interface RenderInput {
   padding?: number;
   /** 是否绘制标题（含副标题），默认 `true`。 */
   title?: boolean;
+  /** 非目标节点（上下文）的文字标签是否绘制。默认 `true`。 */
+  contextLabels?: boolean;
+  /** 目标节点自身的文字标签是否绘制。默认 `true`。 */
+  targetLabels?: boolean;
+  /**
+   * 是否高亮上级轮廓：整体轮廓 + 目标节点以外的全部区块线。
+   * `false`（默认）时它们只画细灰线（`DIM_STROKE` / `DIM_OPACITY`），仅目标节点保持亮白。
+   */
+  highlightContext?: boolean;
+  /** 是否给目标节点所在区域填充半透明高亮背景。默认 `true`。 */
+  targetBackground?: boolean;
 }
 
 export interface RenderOutput {
@@ -70,6 +85,8 @@ export interface RenderOutput {
  * 把 units（各下级，可带 depth）与 outline（整体轮廓）画成一张图。
  * depth 不唯一时按层级区分线条：越深越粗越亮。
  * 查询链（target + chain 上的祖先，且确实画成了区块）单独高亮：最粗、不透明度拉满。
+ * 未高亮上下文时（`highlightContext: false`，默认）：整体轮廓与目标以外的区块只画细灰线，仅目标保持亮白。
+ * 目标节点所在区域可选（`targetBackground`，默认开）填充半透明背景高亮。
  * 标签字号同级统一，由该级中「水平/垂直距离最短的一对」决定。
  * 没有任何可绘制内容时返回 null。
  */
@@ -84,6 +101,10 @@ export function renderMap({
   ratio = "auto",
   padding = PAD,
   title = true,
+  contextLabels = true,
+  targetLabels = true,
+  highlightContext = false,
+  targetBackground = true,
 }: RenderInput): RenderOutput | null {
   const sample = units.flatMap((u) => u.rings).flat();
   if (!sample.length) return null;
@@ -154,10 +175,16 @@ export function renderMap({
   const geo = units
     .map((u) => {
       const p = project(u);
-      return p ? { ...p, name: u.name, depth: u.depth ?? 0, hot: hotOf(u.adcode) } : null;
+      return p
+        ? { ...p, name: u.name, depth: u.depth ?? 0, hot: hotOf(u.adcode), isTarget: u.adcode === target }
+        : null;
     })
     .filter((g): g is NonNullable<typeof g> => g !== null);
   if (!geo.length) return null;
+  const outlineIsTarget = outline != null && outline.adcode === target;
+  const hasTarget = geo.some((g) => g.isTarget) || outlineIsTarget;
+  // 未高亮上下文时：整体轮廓 + 目标节点以外的区块都画成细灰线，仅目标保持亮白
+  const dimContext = !highlightContext && hasTarget;
   const multi = geo.length > 1; // 只有一个区块时无所谓「突出」
   for (const g of geo) if (!multi) g.hot = 0;
 
@@ -166,15 +193,23 @@ export function renderMap({
   const maxArea = Math.max(...geo.map((g) => g.area));
   const rel = (area: number) => Math.sqrt(area / maxArea);
   const strokeOf = (g: (typeof geo)[number]) =>
-    g.hot === 1
-      ? HOT_TARGET
-      : g.hot === 2
-        ? HOT_ANCESTOR
-        : layered
-          ? DEPTH_BASE + DEPTH_STEP * g.depth + 0.45 * rel(g.area)
-          : MIN_STROKE + (MAX_STROKE - MIN_STROKE) * rel(g.area);
+    dimContext && !g.isTarget
+      ? DIM_STROKE
+      : g.hot === 1
+        ? HOT_TARGET
+        : g.hot === 2
+          ? HOT_ANCESTOR
+          : layered
+            ? DEPTH_BASE + DEPTH_STEP * g.depth + 0.45 * rel(g.area)
+            : MIN_STROKE + (MAX_STROKE - MIN_STROKE) * rel(g.area);
   const opacityOf = (g: (typeof geo)[number]) =>
-    g.hot ? 1 : layered ? Math.min(1, 0.45 + 0.18 * g.depth) : 0.88;
+    dimContext && !g.isTarget
+      ? DIM_OPACITY
+      : g.hot
+        ? 1
+        : layered
+          ? Math.min(1, 0.45 + 0.18 * g.depth)
+          : 0.88;
 
   // 同级统一字号：由该级中「水平/垂直距离最短的那一对」决定 —— 超过它这一对就撞上。
   // 每级取所有两两组合允许字号的**最小值**。
@@ -244,8 +279,12 @@ export function renderMap({
 
   const out: string[] = [...outsideLayer];
   for (const g of geo) {
+    const fill =
+      targetBackground && g.isTarget
+        ? ` fill="${TARGET_FILL}" fill-opacity="${TARGET_FILL_OPACITY.toFixed(2)}"`
+        : ` fill="none"`;
     out.push(
-      `<path d="${dOf(g.rings)}" fill="none" stroke="${LINE}" ` +
+      `<path d="${dOf(g.rings)}"${fill} stroke="${LINE}" ` +
         `stroke-width="${strokeOf(g).toFixed(2)}" stroke-opacity="${opacityOf(g).toFixed(2)}" ` +
         `stroke-linejoin="round" stroke-linecap="round"/>`,
     );
@@ -254,10 +293,15 @@ export function renderMap({
     const p = project(outline);
     if (p) {
       // up=0 时轮廓就是目标自身，但轮廓始终只当边框（多层级时更细）
+      const dim = dimContext && !outlineIsTarget;
+      const fill =
+        targetBackground && outlineIsTarget
+          ? ` fill="${TARGET_FILL}" fill-opacity="${TARGET_FILL_OPACITY.toFixed(2)}"`
+          : ` fill="none"`;
       out.push(
-        `<path d="${dOf(p.rings)}" fill="none" stroke="${LINE}" ` +
-          `stroke-width="${(layered ? 2.6 : OUTLINE_STROKE).toFixed(2)}" stroke-opacity="1" ` +
-          `stroke-linejoin="round"/>`,
+        `<path d="${dOf(p.rings)}"${fill} stroke="${LINE}" ` +
+          `stroke-width="${(dim ? DIM_STROKE : layered ? 2.6 : OUTLINE_STROKE).toFixed(2)}" ` +
+          `stroke-opacity="${(dim ? DIM_OPACITY : 1).toFixed(2)}" stroke-linejoin="round"/>`,
       );
     }
   }
@@ -265,6 +309,7 @@ export function renderMap({
   // 标签落质心；同级同字号。自身周边连最小字号都塞不下的（很挤的那几个）就不标
   for (const g of geo) {
     if (ownRoom.get(g)! * 0.9 < FLOOR) continue;
+    if (g.isTarget ? !targetLabels : !contextLabels) continue;
     const font = fontByDepth.get(g.depth)!;
     out.push(
       `<text x="${g.cx.toFixed(1)}" y="${g.cy.toFixed(1)}" font-size="${font.toFixed(1)}" ` +

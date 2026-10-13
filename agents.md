@@ -40,12 +40,16 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
 
 - **构造参数**（对象形式，只有这三个）：`Key`（string）、`fetch`（`(url) => object`）、`cache`（`{ read(key), write(key, value) }`，read/write 允许同步或返回 Promise）。
 - `resolve(keyword, refresh?)` → `{ regions, notes }`：名称/adcode → 命中的行政区（索引优先，未命中回落在线查询）。
-- `generate(keyword, { up?, down?, outside?, ratio?, padding?, title?, refresh? })` → `GenerateResult[]`：每个命中一张图。
+- `generate(keyword, { up?, down?, outside?, ratio?, padding?, title?, contextLabels?, targetLabels?, highlightContext?, targetBackground?, refresh? })` → `GenerateResult[]`：每个命中一张图。
   - `up` 默认 `0`（`"max"` = 到国家级，超过目标深度会被夹到深度）；`down` 只允许 `0 | 1`，默认 `0`。
   - `outside` 默认 `false`：拓展外部轮廓，把「最外层级」（`R(d-up)`，如 杭州 u1 / 浙江 u0 都是浙江省）同级、
     落在当前视图内的其他行政区轮廓也画出来（更细更淡、不加标签、不往下细分、不改变缩放）。
   - 版式：`ratio` 默认 `"auto"`（画幅宽高比，可给正数或 `"16:9"`；给定时内容按长边 1000px 缩放后居中，
     多余空间作为留白补到画布）、`padding` 默认 `24`（内容四周留白 px）、`title` 默认 `true`（是否画标题）。
+  - 聚焦：`highlightContext` 默认 `false` —— 整体轮廓 + 目标节点以外的区块只画细灰线（`1.0` / `opacity 0.3`），
+    仅目标节点亮白；设 `true` 则它们全部亮白（`false` 时退出「查询链高亮」的分级亮度）。`targetBackground` 默认 `true` ——
+    给目标节点所在区域填充半透明背景高亮（目标落到整体轮廓上时填充轮廓区域）。
+  - 标签：`contextLabels` 默认 `true`（非目标节点/上下文的标签）、`targetLabels` 默认 `true`（目标节点自身的标签），可分别关闭。
   - 每项：`query` / `landed`（实际落到的行政区）、`up` / `down`（解析后）、`file`（建议文件名）、`svg`（文本，失败为 `null`）、`blocks`、`outline`、`neighbors`（画出的外部轮廓区块数）、`notes`。
   - 找不到匹配 → `throw`；某一张画不出来 → 该项 `svg: null` + `notes` 说明，不中断其余。
   - 解析层提示（索引构建、匹配上限、限流重试）只挂在第一个结果上，避免多命中时重复。
@@ -55,7 +59,7 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
 ## CLI 运行
 
 ```bash
-bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outside] [--ratio auto|W:H|N] [--padding N] [--no-title] [--out <dir>] [--cache <dir>] [--refresh]
+bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outside] [--ratio auto|W:H|N] [--padding N] [--no-title] [--no-context-labels] [--no-target-label] [--highlight-context] [--no-target-bg] [--out <dir>] [--cache <dir>] [--refresh]
 # 或装好之后：amap-box <行政区名|adcode> [选项]
 ```
 
@@ -71,6 +75,10 @@ bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outsid
 | `--ratio <auto\|W:H\|N>` | 画幅宽高比（`auto` = 按内容；如 `1`、`16:9`） | `auto` |
 | `--padding <N>` | 内容四周留白（px） | `24` |
 | `--no-title` | 不画标题 | — |
+| `--no-context-labels` | 不画非目标节点（上下文）的标签 | — |
+| `--no-target-label` | 不画目标节点自身的标签 | — |
+| `--highlight-context` | 高亮上级轮廓：整体轮廓 + 目标以外的线都画亮白 | — |
+| `--no-target-bg` | 不给目标节点所在区域填充背景高亮 | — |
 | `--out` / `--cache` | 输出目录 / 边界+索引缓存目录 | `out` / `districts` |
 | `--refresh` | 忽略缓存重新拉取（含重建全国索引） | — |
 
@@ -104,7 +112,13 @@ CLI 的磁盘缓存把键映射成 `<cache>/<key>.json`（键 `index` 与 `<adco
 - **往上只有目标那一条支线**：父级的同级会按整级画出来，但不再往下细分
 - **往下是全分支**：目标的每个下级各自再展开
 - **查询链高亮**：目标自身 + 图上画到的链路祖先，线更粗、不透明度拉满 —— 一眼看出"当前指的是哪个"。
-  目标 `3.6`、祖先 `2.4`；只有一个区块时不做区分（没有兄弟可比）
+  目标 `3.6`、祖先 `2.4`；只有一个区块时不做区分（没有兄弟可比）。仅在 `highlightContext: true` 时生效
+- **聚焦 / 上级轮廓**（`highlightContext`，默认 `false`）：整体轮廓 + 目标节点以外的区块一律画细灰线
+  （`DIM_STROKE = 1.0` / `DIM_OPACITY = 0.3`），只有目标节点亮白；设 `true` 则它们全部亮白（走上面的分级亮度）。
+  「目标节点」= 查询命中的那个行政区，它要么是某个区块（`up` 足够小时），要么就是整体轮廓本身（如 `u0d1`）
+- **目标背景高亮**（`targetBackground`，默认 `true`）：给目标节点所在区域填 `TARGET_FILL = #1f6feb`、
+  `opacity 0.22`；目标落到整体轮廓上时填轮廓区域。只是同一 `<path>` 的 `fill` 属性，**不额外增加 path**（区块计数不变）
+- **标签开关**：`contextLabels`（非目标节点/上下文）、`targetLabels`（目标节点自身），默认都开
 - 线宽/亮度按**图内相对层级**（最上层 = 0）：单层区块 `0.8~2.8`（按面积）、层级叠图 `0.55+0.35×depth`；
   整体轮廓与下级同图时 `3.6`（多层级时 `2.6`）—— 轮廓只当边框，`up=0` 时它虽是目标也仍是边框
 - 字号**同级统一**，由该级"水平/垂直距离最短的那一对"决定

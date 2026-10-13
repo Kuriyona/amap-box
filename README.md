@@ -56,7 +56,7 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
 | 方法 | 说明 |
 |---|---|
 | `resolve(keyword, refresh?)` | 名称 / adcode → `{ regions, notes }`。先查索引，索引里没有的（乡镇 / 街道级）回落在线查询 |
-| `generate(keyword, { up?, down?, outside?, ratio?, padding?, title?, refresh? })` | 每个命中出一张图，返回 `GenerateResult[]`（不落盘，`svg` 给你自己写） |
+| `generate(keyword, { up?, down?, outside?, ratio?, padding?, title?, contextLabels?, targetLabels?, highlightContext?, targetBackground?, refresh? })` | 每个命中出一张图，返回 `GenerateResult[]`（不落盘，`svg` 给你自己写） |
 | `ready(refresh?)` | 只预热全国索引 |
 
 `GenerateResult` 字段：
@@ -81,6 +81,11 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
   多余空间补成留白，内容本身不重新缩放。
 - `padding`：内容四周留白（px），默认 `24`。
 - `title`：是否绘制标题（含副标题），默认 `true`。
+- `contextLabels`：是否绘制**非目标节点**（上下文）的标签，默认 `true`。
+- `targetLabels`：是否绘制**目标节点自身**的标签，默认 `true`。
+- `highlightContext`：是否高亮**上级轮廓** —— 即整体轮廓 + 目标节点以外的全部区块线，默认 `false`。
+  默认（`false`）时它们只画细灰线，仅目标节点保持亮白，形成聚焦目标的观感；`true` 时全部亮白。
+- `targetBackground`：是否给**目标节点所在区域**填充半透明背景高亮，默认 `true`（目标落到整体轮廓上时填充轮廓区域）。
 - `refresh`：忽略缓存重新拉取（含重建全国索引）。
 
 失败语义：**没有匹配** → `throw`；某个命中**画不出来** → 该项 `svg: null` 并附 `notes`，不影响其余。
@@ -107,6 +112,10 @@ amap-box <行政区名|adcode> [选项]
 | `--ratio <auto\|W:H\|N>` | 画幅宽高比（`auto` = 按内容；如 `1`、`16:9`） | `auto` |
 | `--padding <N>` | 内容四周留白（px） | `24` |
 | `--no-title` | 不画标题 | — |
+| `--no-context-labels` | 不画非目标节点（上下文）的标签 | — |
+| `--no-target-label` | 不画目标节点自身的标签 | — |
+| `--highlight-context` | 高亮上级轮廓：整体轮廓 + 目标以外的线都画亮白（默认只画细灰线） | — |
+| `--no-target-bg` | 不给目标节点所在区域填充背景高亮 | — |
 | `--out <dir>` | 输出目录 | `out` |
 | `--cache <dir>` | 边界 + 索引缓存目录 | `districts` |
 | `--refresh` | 忽略缓存重新拉取（含重建全国索引） | — |
@@ -149,6 +158,10 @@ amap-box-review 杭州市 上海市 朝阳区    # 指定目标（同名多结�
 - **往上只有目标那一条支线**：父级的同级会按整级画出来，但不再往下细分。
 - **往下是全分支**：目标的每个下级各自再展开。
 - **查询链高亮**：目标自身与图上画到的链路祖先，线更粗、不透明度拉满。
+- **目标聚焦 / 上级轮廓高亮**：默认（`highlightContext: false`）把整体轮廓与目标节点以外的区块都画成细灰线，
+  只有目标节点亮白；`highlightContext: true` 时它们全部亮白。目标节点所在区域默认填充半透明背景高亮
+  （`targetBackground`）。
+- **标签**：非目标节点（`contextLabels`）与目标节点自身（`targetLabels`）的标签可分别开关，默认都画。
 - **外部轮廓**（`outside`）：把最外层级 `R(d-up)` 同级、落在视图内的相邻区域也描一遍（更细更淡、无标签）；
   `R(d-up)` 已是国家级时没有同级。
 - **版式**：内容长边固定 `1000px`，留白 `padding`（默认 `24`），顶部标题带（`title: false` 时去掉）；

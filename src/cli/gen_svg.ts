@@ -21,6 +21,10 @@ const USAGE = `用法: amap-box <行政区名|adcode> [选项]
   --ratio <auto|W:H|N>  画幅宽高比   (默认 auto = 按内容；如 1、16:9)
   --padding <N>  内容四周留白(px)    (默认 24)
   --no-title     不画标题            (默认画)
+  --no-context-labels  不画非目标节点（上下文）的标签  (默认画)
+  --no-target-label    不画目标节点自身的标签          (默认画)
+  --highlight-context  高亮上级轮廓：整体轮廓 + 目标以外的线都亮白 (默认灰)
+  --no-target-bg       不给目标节点所在区域填充背景高亮 (默认填)
   --out <dir>    输出目录            (默认 out)
   --cache <dir>  边界+索引缓存目录     (默认 districts)
   --refresh      忽略缓存，重新拉取（含重建全国索引）
@@ -35,6 +39,10 @@ async function main() {
     chain: boolean;
     outside: boolean;
     noTitle: boolean;
+    noContextLabels: boolean;
+    noTargetLabel: boolean;
+    highlightContext: boolean;
+    noTargetBg: boolean;
     ratio?: string;
     padding?: string;
     up?: string;
@@ -46,6 +54,10 @@ async function main() {
     chain: false,
     outside: false,
     noTitle: false,
+    noContextLabels: false,
+    noTargetLabel: false,
+    highlightContext: false,
+    noTargetBg: false,
   };
   let keyword: string | null = null;
   const argv = process.argv.slice(2);
@@ -58,6 +70,10 @@ async function main() {
     else if (a === "--chain") flags.chain = true;
     else if (a === "--outside") flags.outside = true;
     else if (a === "--no-title") flags.noTitle = true;
+    else if (a === "--no-context-labels") flags.noContextLabels = true;
+    else if (a === "--no-target-label") flags.noTargetLabel = true;
+    else if (a === "--highlight-context") flags.highlightContext = true;
+    else if (a === "--no-target-bg") flags.noTargetBg = true;
     else if (a === "--ratio") flags.ratio = argv[++i];
     else if (a === "--padding") flags.padding = argv[++i];
     else if (a === "--refresh") flags.refresh = true;
@@ -140,6 +156,10 @@ async function main() {
       ratio,
       padding,
       title: !flags.noTitle,
+      contextLabels: !flags.noContextLabels,
+      targetLabels: !flags.noTargetLabel,
+      highlightContext: flags.highlightContext,
+      targetBackground: !flags.noTargetBg,
       refresh: flags.refresh,
     });
   } catch (e) {
@@ -162,6 +182,10 @@ async function main() {
     if (flags.ratio !== undefined) bits.push(`画幅 ${flags.ratio}`);
     if (flags.padding !== undefined) bits.push(`留白 ${flags.padding}px`);
     if (flags.noTitle) bits.push("无标题");
+    if (flags.noContextLabels) bits.push("无上下文标签");
+    if (flags.noTargetLabel) bits.push("无目标标签");
+    if (flags.highlightContext) bits.push("高亮上级轮廓");
+    if (flags.noTargetBg) bits.push("无目标背景");
     console.log(`  已写入 ${file}  （${bits.join("；")}）`);
     written++;
   }
