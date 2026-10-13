@@ -11,6 +11,8 @@ const NAMES: Record<string, { name: string; level: string }> = {
   "330111": { name: "富阳区", level: "district" },
   "330200": { name: "宁波市", level: "city" },
   "330211": { name: "同名区", level: "district" },
+  "320000": { name: "江苏省", level: "province" },
+  "320100": { name: "南京市", level: "city" },
 };
 
 const POLY: Record<string, string> = {
@@ -213,11 +215,48 @@ describe("generate", () => {
     expect(on.notes.join("\n")).toContain("同级候选 1 个，视图内绘出 0 个");
   });
 
-  it("拓展外部轮廓：最外层级已是国家级时无同级", async () => {
+  it("拓展外部轮廓：最外层级即目标自身时无更上层同级", async () => {
     const { box } = makeEnv();
     const [r] = await box.generate("100000", { up: 0, down: 1, outside: true });
     expect(r.neighbors).toBe(0);
-    expect(r.notes.join("\n")).toContain("没有同级相邻区域");
+    expect(r.notes.join("\n")).toContain("没有更上层的同级相邻区域");
+  });
+
+  it("目标同级外部轮廓：up=1 时画出相邻「上一层」下、与目标同层级且落在视图内的区域", async () => {
+    const tree = node("100000", [
+      node("330000", [node("330100", [node("330110", []), node("330111", [])])]),
+      node("320000", [node("320100", [])]),
+    ]);
+    const { box } = makeEnv(tree, {}, {
+      ...POLY,
+      "320000": "120.0,29.0;122.0,29.0;122.0,31.0;120.0,31.0", // 与视图（浙江省）有交叠
+      "320100": "120.2,29.2;121.8,29.2;121.8,30.8;120.2,30.8",
+    });
+    // 仅给 outsideSameLevel（隐含 outside）：最外层同级 = 江苏省；目标同级 = 江苏省的下级 南京市
+    const [r] = await box.generate("杭州市", { up: 1, down: 0, outsideSameLevel: true });
+    expect(r.blocks).toBe(1); // 只画 浙江省的地级市（含杭州市）
+    expect(r.neighbors).toBe(2); // 江苏省 + 南京市
+    expect(r.notes.join("\n")).toContain("目标同级外部轮廓：候选 1 个，视图内绘出 1 个");
+  });
+
+  it("目标同级外部轮廓：视图外的「上一层」不下探", async () => {
+    const tree = node("100000", [
+      node("330000", [node("330100", [])]),
+      node("320000", [node("320100", [])]),
+    ]);
+    const { box } = makeEnv(tree, {}, {
+      ...POLY,
+      "320000": "100.0,20.0;101.0,20.0;101.0,21.0;100.0,21.0", // 远在视图外
+      "320100": "100.2,20.2;100.8,20.2;100.8,20.8;100.2,20.8",
+    });
+    const [r] = await box.generate("杭州市", { up: 1, down: 0, outsideSameLevel: true });
+    expect(r.neighbors).toBe(0);
+    expect(r.notes.join("\n")).toContain("目标同级外部轮廓：候选 0 个，视图内绘出 0 个");
+  });
+
+  it("目标同级外部轮廓：超出可用条件（up>=2 且目标为地级/县级）时报错", async () => {
+    const { box } = makeEnv();
+    await expect(box.generate("330110", { up: 2, down: 0, outsideSameLevel: true })).rejects.toThrow(/outsideSameLevel/);
   });
 
   it("版式：ratio / padding / title 生效，非法值报错", async () => {

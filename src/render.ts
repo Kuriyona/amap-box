@@ -54,6 +54,8 @@ export interface RenderInput {
    * 外部轮廓候选：与「最外层级」同级、落在当前视图内的会以更细更淡的线条画出（不参与缩放，也不加标签）。
    */
   outside?: RenderUnit[];
+  /** 与「目标层级」同级的外部轮廓候选，样式同 `outside`。 */
+  outsideTarget?: RenderUnit[];
   /** 画幅宽高比，默认 `"auto"`（按内容）。 */
   ratio?: MapRatio;
   /** 内容四周留白（px），默认 `PAD`。 */
@@ -77,8 +79,10 @@ export interface RenderOutput {
   markup: string;
   W: number;
   H: number;
-  /** 实际画出的外部轮廓区块数。 */
+  /** 实际画出的外部轮廓区块总数（最外层同级 + 目标同级）。 */
   outside: number;
+  /** 其中「与目标同级」的外部轮廓区块数。 */
+  outsideTarget: number;
 }
 
 /**
@@ -98,6 +102,7 @@ export function renderMap({
   chain = [],
   target = null,
   outside = [],
+  outsideTarget = [],
   ratio = "auto",
   padding = PAD,
   title = true,
@@ -251,31 +256,39 @@ export function renderMap({
       .map((r) => "M " + r.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" L ") + " Z")
       .join(" ");
 
-  // 拓展外部轮廓：与最外层级同级、投影后与画布（即当前视图）相交的相邻区域，只描边、不参与缩放/标签。
+  // 拓展外部轮廓：与最外层/目标层级同级、投影后与画布（即当前视图）相交的相邻区域，只描边、不参与缩放/标签。
   // 相邻区域与本图最外层级共享边界，其投影包围盒必然探进画布，故「有交叠」即「在视图内」。
   const outsideLayer: string[] = [];
-  for (const u of outside) {
-    const p = project(u);
-    if (!p) continue;
-    let minx = Infinity;
-    let miny = Infinity;
-    let maxx = -Infinity;
-    let maxy = -Infinity;
-    for (const r of p.rings) {
-      for (const [x, y] of r) {
-        if (x < minx) minx = x;
-        if (x > maxx) maxx = x;
-        if (y < miny) miny = y;
-        if (y > maxy) maxy = y;
+  const drawOutside = (list: RenderUnit[]) => {
+    let drawn = 0;
+    for (const u of list) {
+      const p = project(u);
+      if (!p) continue;
+      let minx = Infinity;
+      let miny = Infinity;
+      let maxx = -Infinity;
+      let maxy = -Infinity;
+      for (const r of p.rings) {
+        for (const [x, y] of r) {
+          if (x < minx) minx = x;
+          if (x > maxx) maxx = x;
+          if (y < miny) miny = y;
+          if (y > maxy) maxy = y;
+        }
       }
+      if (!(maxx > 0 && minx < W && maxy > 0 && miny < H)) continue; // 完全落在视图外
+      outsideLayer.push(
+        `<path d="${dOf(p.rings)}" fill="none" stroke="${LINE}" ` +
+          `stroke-width="${OUTSIDE_STROKE.toFixed(2)}" stroke-opacity="${OUTSIDE_OPACITY.toFixed(2)}" ` +
+          `stroke-linejoin="round"/>`,
+      );
+      drawn++;
     }
-    if (!(maxx > 0 && minx < W && maxy > 0 && miny < H)) continue; // 完全落在视图外
-    outsideLayer.push(
-      `<path d="${dOf(p.rings)}" fill="none" stroke="${LINE}" ` +
-        `stroke-width="${OUTSIDE_STROKE.toFixed(2)}" stroke-opacity="${OUTSIDE_OPACITY.toFixed(2)}" ` +
-        `stroke-linejoin="round"/>`,
-    );
-  }
+    return drawn;
+  };
+  const outsideBase = drawOutside(outside);
+  const outsideTargetDrawn = drawOutside(outsideTarget);
+  const outsideTotal = outsideBase + outsideTargetDrawn;
 
   const out: string[] = [...outsideLayer];
   for (const g of geo) {
@@ -318,7 +331,7 @@ export function renderMap({
     );
   }
 
-  if (!title) return { markup: out.join("\n"), W, H, outside: outsideLayer.length };
+  if (!title) return { markup: out.join("\n"), W, H, outside: outsideTotal, outsideTarget: outsideTargetDrawn };
 
   const tFont = Math.max(13, Math.min(30, W * 0.017));
   const sFont = tFont * 0.5;
@@ -344,7 +357,7 @@ export function renderMap({
     );
   }
 
-  return { markup: out.join("\n"), W, H, outside: outsideLayer.length };
+  return { markup: out.join("\n"), W, H, outside: outsideTotal, outsideTarget: outsideTargetDrawn };
 }
 
 /** 给渲染结果套上 `<svg>` 外壳。 */

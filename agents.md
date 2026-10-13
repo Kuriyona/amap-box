@@ -40,10 +40,12 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
 
 - **构造参数**（对象形式，只有这三个）：`Key`（string）、`fetch`（`(url) => object`）、`cache`（`{ read(key), write(key, value) }`，read/write 允许同步或返回 Promise）。
 - `resolve(keyword, refresh?)` → `{ regions, notes }`：名称/adcode → 命中的行政区（索引优先，未命中回落在线查询）。
-- `generate(keyword, { up?, down?, outside?, ratio?, padding?, title?, contextLabels?, targetLabels?, highlightContext?, targetBackground?, refresh? })` → `GenerateResult[]`：每个命中一张图。
+- `generate(keyword, { up?, down?, outside?, outsideSameLevel?, ratio?, padding?, title?, contextLabels?, targetLabels?, highlightContext?, targetBackground?, refresh? })` → `GenerateResult[]`：每个命中一张图。
   - `up` 默认 `0`（`"max"` = 到国家级，超过目标深度会被夹到深度）；`down` 只允许 `0 | 1`，默认 `0`。
   - `outside` 默认 `false`：拓展外部轮廓，把「最外层级」（`R(d-up)`，如 杭州 u1 / 浙江 u0 都是浙江省）同级、
     落在当前视图内的其他行政区轮廓也画出来（更细更淡、不加标签、不往下细分、不改变缩放）。
+  - `outsideSameLevel` 默认 `false`：把「与目标同层级」（第 `d` 级）、落在视图内的区域也作为外部轮廓画出；单独给出即隐含 `outside`。
+    为控成本，先筛出视图内的「上一层」（第 `d-1` 级）元素，再取其第 `d` 级下级。**仅当 `up <= 1` 或目标为省级以上时可用**，否则 `generate` 抛出。
   - 版式：`ratio` 默认 `"auto"`（画幅宽高比，可给正数或 `"16:9"`；给定时内容按长边 1000px 缩放后居中，
     多余空间作为留白补到画布）、`padding` 默认 `24`（内容四周留白 px）、`title` 默认 `true`（是否画标题）。
   - 聚焦：`highlightContext` 默认 `false` —— 整体轮廓 + 目标节点以外的区块只画细灰线（`1.0` / `opacity 0.3`），
@@ -72,6 +74,7 @@ bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outsid
 | `--down <0\|1>` | 往下细分几级（`0` = 只画目标自身） | `0` |
 | `--chain` | 等价于 `--up max` | — |
 | `--outside` | 拓展外部轮廓：把「最外层级」同级、视图内的其他行政区轮廓也画出（更细更淡，不往下细分） | — |
+| `--outside-same-level` | 同时把「与目标同层级」、视图内的区域也画出（隐含 `--outside`；仅 `up<=1` 或目标为省级以上可用，否则报错） | — |
 | `--ratio <auto\|W:H\|N>` | 画幅宽高比（`auto` = 按内容；如 `1`、`16:9`） | `auto` |
 | `--padding <N>` | 内容四周留白（px） | `24` |
 | `--no-title` | 不画标题 | — |
@@ -126,6 +129,9 @@ CLI 的磁盘缓存把键映射成 `<cache>/<key>.json`（键 `index` 与 `<adco
   （即落在当前视图内）的那些轮廓也画出来，线细（`1.0`）、淡（`opacity 0.3`）、不加标签，也不参与缩放与层级推导；
   相邻区域与本图最外层共享边界，所以探进视图的邻居会被自然裁到画布边缘，形成"更完整地图"的感觉。
   `R(d-up)` 已是国家级（如 中国、浙江 u1）时没有同级，无效果。
+- **目标同级外部轮廓**（`--outside-same-level` / `outsideSameLevel`）：再把「与目标同层级」`d`、落在视图内的区域也描一遍
+  （样式同外部轮廓）。为控成本，先筛出视图内的「上一层」（第 `d-1` 级）元素，再取其第 `d` 级下级（`up=1` 时「上一层」= 已取回的
+  「最外层同级」候选；`up=0` 时最外层同级已覆盖目标同级，去重后为空）。**仅当 `up <= 1` 或目标为省级以上可用**，否则报错。
 - **版式**：内容长边固定缩放到 `MAP_LONG = 1000px`，四周留白 `padding`（默认 `24`），顶部标题带 `CAPTION_H = 46`
   （`title: false` 时标题与标题带一起去掉）；`ratio`（默认 `"auto"`）只决定画布宽高比 —— 给定时内容**不重新缩放**，
   居中后把多余空间补成留白，所以 `auto` 与任何比例下内容的实际尺寸一致。

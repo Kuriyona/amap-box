@@ -74,6 +74,11 @@ export interface SpanOptions extends LayoutOptions {
    * 行政区中，落在当前视图内的那些轮廓也画出来（不往下细分），让图更完整。默认 `false`。
    */
   outside?: boolean;
+  /**
+   * 是否把「与目标同层级」的区域也作为外部轮廓画出（落在视图内的）。默认 `false`。
+   * 单独给出即隐含 `outside`。仅当 `up <= 1` 或目标为省级以上时可用，否则 `generate` 报错。
+   */
+  outsideSameLevel?: boolean;
   /** 忽略缓存重新拉取（含重建全国索引）。 */
   refresh?: boolean;
 }

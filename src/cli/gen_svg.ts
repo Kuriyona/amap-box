@@ -18,6 +18,8 @@ const USAGE = `用法: amap-box <行政区名|adcode> [选项]
   --down <0|1>   往下细分几级       (默认 0；0 = 只画目标自身，1 = 再画一级下级)
   --chain        等价于 --up max
   --outside      拓展外部轮廓：把「最外层级」同级、落在视图内的相邻区域一并画出（不往下细分）
+  --outside-same-level  同时把「与目标同层级」、落在视图内的区域也作为外部轮廓画出（隐含 --outside；
+                        仅 up<=1 或目标为省级以上时可用，否则报错）
   --ratio <auto|W:H|N>  画幅宽高比   (默认 auto = 按内容；如 1、16:9)
   --padding <N>  内容四周留白(px)    (默认 24)
   --no-title     不画标题            (默认画)
@@ -38,6 +40,7 @@ async function main() {
     refresh: boolean;
     chain: boolean;
     outside: boolean;
+    outsideSameLevel: boolean;
     noTitle: boolean;
     noContextLabels: boolean;
     noTargetLabel: boolean;
@@ -53,6 +56,7 @@ async function main() {
     refresh: false,
     chain: false,
     outside: false,
+    outsideSameLevel: false,
     noTitle: false,
     noContextLabels: false,
     noTargetLabel: false,
@@ -69,6 +73,7 @@ async function main() {
     else if (a === "--down") flags.down = argv[++i];
     else if (a === "--chain") flags.chain = true;
     else if (a === "--outside") flags.outside = true;
+    else if (a === "--outside-same-level") flags.outsideSameLevel = true;
     else if (a === "--no-title") flags.noTitle = true;
     else if (a === "--no-context-labels") flags.noContextLabels = true;
     else if (a === "--no-target-label") flags.noTargetLabel = true;
@@ -153,6 +158,7 @@ async function main() {
       up: upReq,
       down: downReq,
       outside: flags.outside,
+      outsideSameLevel: flags.outsideSameLevel,
       ratio,
       padding,
       title: !flags.noTitle,
@@ -186,6 +192,7 @@ async function main() {
     if (flags.noTargetLabel) bits.push("无目标标签");
     if (flags.highlightContext) bits.push("高亮上级轮廓");
     if (flags.noTargetBg) bits.push("无目标背景");
+    if (flags.outsideSameLevel) bits.push("含目标同级轮廓");
     console.log(`  已写入 ${file}  （${bits.join("；")}）`);
     written++;
   }

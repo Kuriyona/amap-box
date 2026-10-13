@@ -4,7 +4,7 @@
  * 构造：`new AmapBox({ Key, fetch, cache })`。取数与缓存都由调用方注入，
  * 因此在 Node / Bun / 浏览器 / 测试里都能用同一份逻辑。
  */
-import type { AmapDistrict, AmapBoxOptions, GenerateResult, LayoutOptions, ResolveResult, SpanOptions } from "./types.js";
+import type { AmapDistrict, AmapBoxOptions, GenerateResult, ResolveResult, SpanOptions } from "./types.js";
 import { toUnit, type Unit } from "./geometry.js";
 import { parseRatio, renderMap, wrapSvg, type RenderUnit } from "./render.js";
 
@@ -23,6 +23,33 @@ const onPath = (childAdcode: string, targetAdcode: string) => {
   const p = childAdcode.replace(/0+$/, "");
   return p.length >= 2 && targetAdcode.startsWith(p);
 };
+
+interface BBox {
+  minLon: number;
+  minLat: number;
+  maxLon: number;
+  maxLat: number;
+}
+
+/** 一组区块的经纬度包围盒（视图的近似），无点返回 null。 */
+const bboxOf = (units: Unit[]): BBox | null => {
+  let minLon = Infinity;
+  let minLat = Infinity;
+  let maxLon = -Infinity;
+  let maxLat = -Infinity;
+  for (const u of units)
+    for (const ring of u.rings)
+      for (const [lon, lat] of ring) {
+        if (lon < minLon) minLon = lon;
+        if (lon > maxLon) maxLon = lon;
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+      }
+  return Number.isFinite(minLon) ? { minLon, minLat, maxLon, maxLat } : null;
+};
+
+const bboxHit = (a: BBox, b: BBox) =>
+  a.minLon <= b.maxLon && a.maxLon >= b.minLon && a.minLat <= b.maxLat && a.maxLat >= b.minLat;
 
 interface ApiResponse {
   status?: string;
@@ -225,11 +252,13 @@ export class AmapBox {
     root: AmapDistrict,
     upReq: number | "max",
     down: 0 | 1,
-    refresh: boolean,
     shared: string[],
-    outside: boolean,
-    layout: LayoutOptions,
+    span: SpanOptions,
   ): Promise<GenerateResult> {
+    const refresh = !!span.refresh;
+    const outsideSameLevel = !!span.outsideSameLevel;
+    const outside = !!span.outside || outsideSameLevel; // 目标同级隐含外部轮廓
+    const layout = span;
     const query = { name: root.name, adcode: root.adcode, level: root.level ?? "" };
     const local: string[] = [];
     const finish = (extra: Partial<GenerateResult> & { up: number; file: string }) =>
@@ -248,6 +277,11 @@ export class AmapBox {
     if (up > d) {
       local.push(`往上级数 ${up} 超出范围（${landed.name} 只有 ${d} 级祖先），已按 ${d} 处理`);
       up = d;
+    }
+    if (outsideSameLevel && !(up <= 1 || d <= 1)) {
+      throw new Error(
+        `outsideSameLevel 仅在 up <= 1 或目标为省级以上时可用：${landed.name} 处于第 ${d} 级（${landed.level}）、up=${up}`,
+      );
     }
     const start = d - up + 1; // 这张图画的第一级
     const end = d + down; // 最后一级
@@ -294,26 +328,54 @@ export class AmapBox {
       units.push({ ...toUnit(self), depth: 0 });
     }
 
-    // 拓展外部轮廓：与「最外层级」R(d-up) 同级的其他行政区（不往下细分），
-    // 边界取回来交给 renderMap，由它只画落在当前视图内的那些。
+    // 外部轮廓候选：统一去重，排除目标自身与已绘制的区块（避免与区块路径重复）。
+    const drawn = new Set(units.map((u) => u.adcode));
+    if (outline) drawn.add(outline.adcode);
+    const added = new Set<string>();
     const outsideCandidates: AmapDistrict[] = [];
+    const targetCandidates: AmapDistrict[] = [];
+    const addCandidate = (into: AmapDistrict[], c: AmapDistrict) => {
+      if (!c.level || !DRAWABLE[c.level]) return;
+      if (c.adcode === landed.adcode || drawn.has(c.adcode) || added.has(c.adcode)) return;
+      added.add(c.adcode);
+      into.push(c);
+    };
+    // 最外层同级：R(d-up) 的同级其他行政区（不往下细分）
     if (outside && d - up >= 1) {
       const top = chain[d - up].region;
       for (const c of chain[d - up - 1].children ?? []) {
-        if (c.adcode === top.adcode || !c.level || !DRAWABLE[c.level]) continue;
-        outsideCandidates.push(c);
+        if (c.adcode !== top.adcode) addCandidate(outsideCandidates, c);
       }
     }
-    const neighbors: RenderUnit[] = [];
-    for (const c of outsideCandidates) {
-      const full = await this.#fetchRegion(c.adcode, refresh, local);
-      if (full?.polyline) neighbors.push({ ...toUnit(full), depth: 0 });
+    const fetchUnits = async (cands: AmapDistrict[]) => {
+      const out: RenderUnit[] = [];
+      for (const c of cands) {
+        const full = await this.#fetchRegion(c.adcode, refresh, local);
+        if (full?.polyline) out.push({ ...toUnit(full), depth: 0 });
+      }
+      return out;
+    };
+    const outsideUnits = await fetchUnits(outsideCandidates);
+    // 目标同级：先定位「上一层」元素，再取其下级中落在视图内的那些。
+    // 可用条件保证视图不超过最外层级：up=0 时最外层同级已覆盖目标同级（去重后为空）；
+    // up=1 时「上一层」元素 = 已取回的「最外层同级」候选（同为第 d-1 级）。
+    if (outsideSameLevel && up === 1) {
+      const viewBox = bboxOf([...units, ...(outline ? [outline] : [])]);
+      if (viewBox) {
+        for (const u of outsideUnits) {
+          const b = bboxOf([u]);
+          if (!b || !bboxHit(b, viewBox)) continue; // 先筛落在视图内的上一层元素
+          for (const c of this.#fetchTree(u.adcode)?.children ?? []) addCandidate(targetCandidates, c);
+        }
+      }
     }
+    const targetUnits = await fetchUnits(targetCandidates);
 
     const map = renderMap({
       units,
       outline,
-      outside: neighbors,
+      outside: outsideUnits,
+      outsideTarget: targetUnits,
       ratio: layout.ratio,
       padding: layout.padding,
       title: layout.title,
@@ -336,9 +398,12 @@ export class AmapBox {
     if (outside) {
       local.push(
         d - up < 1
-          ? "拓展外部轮廓：最外层级已是国家级，没有同级相邻区域"
-          : `拓展外部轮廓：同级候选 ${outsideCandidates.length} 个，视图内绘出 ${map.outside} 个`,
+          ? "拓展外部轮廓：最外层级即目标自身，没有更上层的同级相邻区域"
+          : `拓展外部轮廓：同级候选 ${outsideCandidates.length} 个，视图内绘出 ${map.outside - map.outsideTarget} 个`,
       );
+    }
+    if (outsideSameLevel) {
+      local.push(`目标同级外部轮廓：候选 ${targetCandidates.length} 个，视图内绘出 ${map.outsideTarget} 个`);
     }
     return {
       query,
@@ -376,7 +441,7 @@ export class AmapBox {
     const out: GenerateResult[] = [];
     for (let i = 0; i < regions.length; i++) {
       // 解析层的提示（索引构建/匹配上限/限流）只挂在第一个结果上，避免多命中时重复
-      out.push(await this.#renderOne(regions[i], upReq, downReq, !!span.refresh, i === 0 ? notes : [], !!span.outside, span));
+      out.push(await this.#renderOne(regions[i], upReq, downReq, i === 0 ? notes : [], span));
     }
     return out;
   }

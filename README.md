@@ -56,7 +56,7 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
 | 方法 | 说明 |
 |---|---|
 | `resolve(keyword, refresh?)` | 名称 / adcode → `{ regions, notes }`。先查索引，索引里没有的（乡镇 / 街道级）回落在线查询 |
-| `generate(keyword, { up?, down?, outside?, ratio?, padding?, title?, contextLabels?, targetLabels?, highlightContext?, targetBackground?, refresh? })` | 每个命中出一张图，返回 `GenerateResult[]`（不落盘，`svg` 给你自己写） |
+| `generate(keyword, { up?, down?, outside?, outsideSameLevel?, ratio?, padding?, title?, contextLabels?, targetLabels?, highlightContext?, targetBackground?, refresh? })` | 每个命中出一张图，返回 `GenerateResult[]`（不落盘，`svg` 给你自己写） |
 | `ready(refresh?)` | 只预热全国索引 |
 
 `GenerateResult` 字段：
@@ -77,6 +77,9 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
 - `down`：往下细分几级，只允许 `0 | 1`，默认 `0`；`1` = 再画一级下级。
 - `outside`：是否拓展外部轮廓，默认 `false`。启用后把**最外层级**（`R(d-up)`，如 杭州 u1 / 浙江 u0 都是浙江省）
   同级的其他行政区中、落在当前视图内的那些轮廓也画出来（更细更淡、不加标签、不往下细分、不改变缩放），让图更完整。
+- `outsideSameLevel`：是否把**与目标同层级**（第 `d` 级）的区域也作为外部轮廓画出（落在视图内的才画）。默认 `false`。
+  单独给出即隐含 `outside`。为控成本，先筛出落在视图内的「上一层」（第 `d-1` 级）元素，再取它们的第 `d` 级下级。
+  **仅当 `up <= 1` 或目标为省级以上时可用**，否则 `generate` 报错。
 - `ratio`：画幅宽高比，默认 `"auto"`（按内容）。可给正数或 `"16:9"`；给定时内容按长边 `1000px` 缩放后居中，
   多余空间补成留白，内容本身不重新缩放。
 - `padding`：内容四周留白（px），默认 `24`。
@@ -109,6 +112,7 @@ amap-box <行政区名|adcode> [选项]
 | `--down <0\|1>` | 往下细分几级（`0` = 只画目标自身） | `0` |
 | `--chain` | 等价于 `--up max` | — |
 | `--outside` | 拓展外部轮廓：把「最外层级」同级、视图内的其他行政区轮廓也画出（更细更淡，不往下细分） | — |
+| `--outside-same-level` | 同时画出「与目标同层级」、视图内的区域（隐含 `--outside`；仅 `up<=1` 或目标为省级以上可用，否则报错） | — |
 | `--ratio <auto\|W:H\|N>` | 画幅宽高比（`auto` = 按内容；如 `1`、`16:9`） | `auto` |
 | `--padding <N>` | 内容四周留白（px） | `24` |
 | `--no-title` | 不画标题 | — |
@@ -164,6 +168,8 @@ amap-box-review 杭州市 上海市 朝阳区    # 指定目标（同名多结�
 - **标签**：非目标节点（`contextLabels`）与目标节点自身（`targetLabels`）的标签可分别开关，默认都画。
 - **外部轮廓**（`outside`）：把最外层级 `R(d-up)` 同级、落在视图内的相邻区域也描一遍（更细更淡、无标签）；
   `R(d-up)` 已是国家级时没有同级。
+- **目标同级外部轮廓**（`outsideSameLevel`）：再把**与目标同层级** `d`、落在视图内的区域也描一遍（样式同上）。
+  先筛出视图内的「上一层」（`d-1` 级）元素，再取它们的第 `d` 级下级，避免整棵展开；仅 `up<=1` 或目标为省级以上可用。
 - **版式**：内容长边固定 `1000px`，留白 `padding`（默认 `24`），顶部标题带（`title: false` 时去掉）；
   `ratio` 只决定画布宽高比，给定时内容不重新缩放，居中后把多余空间补成留白。
 - 线宽、字号都按图内相对层级统一推导。
