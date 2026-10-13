@@ -56,7 +56,7 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
 | 方法 | 说明 |
 |---|---|
 | `resolve(keyword, refresh?)` | 名称 / adcode → `{ regions, notes }`。先查索引，索引里没有的（乡镇 / 街道级）回落在线查询 |
-| `generate(keyword, { up?, down?, outside?, outsideSameLevel?, ratio?, padding?, title?, contextLabels?, targetLabels?, targetBackground?, center?, refresh? })` | 每个命中出一张图，返回 `GenerateResult[]`（不落盘，`svg` 给你自己写） |
+| `generate(keyword, { up?, down?, outside?, outsideSameLevel?, ratio?, padding?, title?, contextLabels?, targetLabels?, targetBackground?, colors?, center?, refresh? })` | 每个命中出一张图，返回 `GenerateResult[]`（不落盘，`svg` 给你自己写） |
 | `ready(refresh?)` | 只预热全国索引 |
 
 `GenerateResult` 字段：
@@ -86,6 +86,9 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
 - `title`：是否绘制标题（含副标题），默认 `true`。
 - `contextLabels`：是否绘制**非目标节点**（上下文）的标签，默认 `true`。
 - `targetLabels`：是否绘制**目标节点自身**的标签，默认 `true`。
+- `colors`：配色覆盖，默认无（用内置常量）。可给 `{ background?, line?, targetFill? }` 覆盖任意几项：
+  画布背景（默认 `#0d1117`）、线条与文字（默认 `#ffffff`）、目标节点背景高亮（默认 `#1f6feb`）。
+  值为任意非空字符串（如 `"#101820"`、`"none"`、`"transparent"`）；空串或非对象会报错。
 - 层级分层（**始终生效，没有开关**）：目标以外的节点按**图内相对层级**绘制 —— 整体轮廓最粗最亮（`OUTLINE_STROKE = 2.8`），
   区块越浅的层级越粗越亮；目标（与图上画到的链路祖先）单独高亮。`MIN_STROKE`~`MAX_STROKE` 给出区块线宽范围。
 - `targetBackground`：是否给**目标节点所在区域**填充半透明背景高亮，默认 `true`（目标落到整体轮廓上时填充轮廓区域）。
@@ -103,7 +106,7 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
 
 `svgFileName`、`parseRatio` / `parseCenter` / `centerRatioViewBox`、`parsePolyline` / `toUnit` / `signedArea` / `centroid` / `pointInRing` / `simplify`、
 `renderMap` / `wrapSvg`，以及 `AmapBoxOptions` / `AmapCache` / `AmapFetch` / `SpanOptions` / `LayoutOptions` /
-`MapRatio` / `CenterMode` / `GenerateResult` 等类型。
+`ColorOptions` / `MapRatio` / `CenterMode` / `GenerateResult` 等类型。
 
 ## CLI
 

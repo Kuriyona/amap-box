@@ -26,6 +26,7 @@ export type {
   AmapBoxOptions,
   SpanOptions,
   LayoutOptions,
+  ColorOptions,
   MapRatio,
   ResolveResult,
   GenerateResult,

@@ -40,7 +40,7 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
 
 - **构造参数**（对象形式，只有这三个）：`Key`（string）、`fetch`（`(url) => object`）、`cache`（`{ read(key), write(key, value) }`，read/write 允许同步或返回 Promise）。
 - `resolve(keyword, refresh?)` → `{ regions, notes }`：名称/adcode → 命中的行政区（索引优先，未命中回落在线查询）。
-- `generate(keyword, { up?, down?, outside?, outsideSameLevel?, ratio?, padding?, title?, contextLabels?, targetLabels?, targetBackground?, center?, refresh? })` → `GenerateResult[]`：每个命中一张图。
+- `generate(keyword, { up?, down?, outside?, outsideSameLevel?, ratio?, padding?, title?, contextLabels?, targetLabels?, targetBackground?, colors?, center?, refresh? })` → `GenerateResult[]`：每个命中一张图。
   - `up` 默认 `0`（`"max"` = 到国家级，超过目标深度会被夹到深度）；`down` 只允许 `0 | 1`，默认 `0`。
   - `outside` 默认 `false`：拓展外部轮廓，把「最外层级」（`R(d-up)`，如 杭州 u1 / 浙江 u0 都是浙江省）同级、
     落在当前视图内的其他行政区轮廓也画出来（更细更淡、不加标签、不往下细分、不改变缩放）。
@@ -52,6 +52,8 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
     区块越浅的层级越粗越亮（每层距 `CTX_BAND_STEP = 0.2`，同级内面积微调 ≤ `0.75×层距`），目标单独高亮（`HOT_TARGET`）。始终生效，无开关。
     `targetBackground` 默认 `true` —— 给目标节点所在区域填充半透明背景高亮（目标落到整体轮廓上时填充轮廓区域）。
   - 标签：`contextLabels` 默认 `true`（非目标节点/上下文的标签）、`targetLabels` 默认 `true`（目标节点自身的标签），可分别关闭。
+  - 配色：`colors` 默认无（用内置常量），可给 `{ background?, line?, targetFill? }` 覆盖其中任意几项 ——
+    背景（默认 `#0d1117`）、线条与文字（默认 `#ffffff`）、目标背景高亮（默认 `#1f6feb`）；空串或非对象报错。
   - 目标居中：`center` 默认 `false`（内容包围盒居中）。`true` / `"outline"` = 目标质心居中，并保证最外层轮廓
     `R(d-up)` 完整可见（目标偏居轮廓一角时留白较多；目标即轮廓时与默认一致）；`"target"` = 占比模式默认 `0.5`；
     数字（`0 < N <= 1`）= 目标包围盒长边占画幅可绘区长边的比例，目标质心居中、上下文超出画幅即裁掉，

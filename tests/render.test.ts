@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CAPTION_H, CONTEXT_OPACITY_MAX, HOT_TARGET, MAP_LONG, OUTLINE_STROKE, PAD, renderMap, TARGET_FILL, wrapSvg, type RenderUnit } from "../src/render.js";
+import { BG, CAPTION_H, CONTEXT_OPACITY_MAX, HOT_TARGET, LINE, MAP_LONG, OUTLINE_STROKE, PAD, renderMap, TARGET_FILL, wrapSvg, type RenderUnit } from "../src/render.js";
 
 const square = (x: number, s: number) => [
   [120 + x, 30],
@@ -119,6 +119,27 @@ describe("renderMap", () => {
     expect(on.markup).toContain(`fill="${TARGET_FILL}"`);
     expect(off.markup).not.toContain(TARGET_FILL);
     expect(countPaths(on.markup)).toBe(countPaths(off.markup)); // 背景高亮是同一 path 的 fill 属性
+  });
+
+  it("配色：colors 覆盖背景 / 线条 / 目标高亮，未给项保持默认", () => {
+    const u = unit("杭州市", "330100", 0);
+    const def = renderMap({ units: [u], outline: null, caption: "T", target: "330100" })!;
+    expect(wrapSvg(def)).toContain(`fill="${BG}"`);
+    expect(def.markup).toContain(`fill="${LINE}"`);
+    const map = renderMap({
+      units: [u],
+      outline: null,
+      caption: "T",
+      target: "330100",
+      colors: { background: "#001122", line: "#abcdef", targetFill: "#ff0000" },
+    })!;
+    const svg = wrapSvg(map);
+    expect(svg).toContain(`fill="#001122"`); // 背景
+    expect(map.markup).toContain(`stroke="#abcdef"`); // 线条
+    expect(map.markup).toContain(`fill="#abcdef"`); // 文字
+    expect(map.markup).toContain(`fill="#ff0000"`); // 目标高亮
+    expect(map.markup).not.toContain(TARGET_FILL);
+    expect(svg).not.toContain(BG);
   });
 
   it("目标背景：目标落到整体轮廓上时填充轮廓区域", () => {

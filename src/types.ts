@@ -42,8 +42,20 @@ export interface AmapBoxOptions {
 /** 画幅比例：`"auto"`（按内容）或正数宽高比 W/H；也接受 `"16:9"` 这样的字符串。 */
 export type MapRatio = number | "auto" | `${number}:${number}`;
 
+/** 配色：三项都可选，未给的用默认值。 */
+export interface ColorOptions {
+  /** 画布背景色。默认 `#0d1117`（`BG`）。 */
+  background?: string;
+  /** 线条与文字颜色。默认 `#ffffff`（`LINE`）。 */
+  line?: string;
+  /** 目标节点所在区域的背景高亮色。默认 `#1f6feb`（`TARGET_FILL`）。 */
+  targetFill?: string;
+}
+
 /** 出图版式（画幅）。 */
 export interface LayoutOptions {
+  /** 配色覆盖（背景 / 线条与文字 / 目标高亮）。 */
+  colors?: ColorOptions;
   /** 画幅宽高比。默认 `"auto"`：由内容包围盒 + 留白 + 标题带决定。 */
   ratio?: MapRatio;
   /** 内容四周留白（px）。默认 `24`。 */

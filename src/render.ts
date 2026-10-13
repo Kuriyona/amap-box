@@ -2,7 +2,7 @@
  * 渲染：把行政区环投影成 SVG 线稿。纯函数，无 IO。
  */
 import { centroid, pointInRing, signedArea, simplify, type Point, type Unit } from "./geometry.js";
-import type { MapRatio } from "./types.js";
+import type { ColorOptions, MapRatio } from "./types.js";
 
 export const BG = "#0d1117";
 export const LINE = "#ffffff";
@@ -96,6 +96,8 @@ export interface RenderUnit extends Unit {
 }
 
 export interface RenderInput {
+  /** 配色覆盖：背景 / 线条与文字 / 目标高亮，未给的用默认常量。 */
+  colors?: ColorOptions;
   units: RenderUnit[];
   outline: Unit | null;
   caption: string;
@@ -135,6 +137,8 @@ export interface RenderOutput {
   markup: string;
   W: number;
   H: number;
+  /** 画布背景色。 */
+  bg: string;
   /** 实际画出的外部轮廓区块总数（最外层同级 + 目标同级）。 */
   outside: number;
   /** 其中「与目标同级」的外部轮廓区块数。 */
@@ -150,6 +154,7 @@ export interface RenderOutput {
  * 没有任何可绘制内容时返回 null。
  */
 export function renderMap({
+  colors,
   units,
   outline,
   caption,
@@ -166,6 +171,9 @@ export function renderMap({
   targetBackground = true,
   center = false,
 }: RenderInput): RenderOutput | null {
+  const bg = colors?.background ?? BG;
+  const line = colors?.line ?? LINE;
+  const targetFill = colors?.targetFill ?? TARGET_FILL;
   const sample = units.flatMap((u) => u.rings).flat();
   if (!sample.length) return null;
   const lat0 = sample.reduce((s, p) => s + p[1], 0) / sample.length;
@@ -379,7 +387,7 @@ export function renderMap({
       }
       if (!(maxx > 0 && minx < W && maxy > 0 && miny < H)) continue; // 完全落在视图外
       outsideLayer.push(
-        `<path d="${dOf(p.rings)}" fill="none" stroke="${LINE}" ` +
+        `<path d="${dOf(p.rings)}" fill="none" stroke="${line}" ` +
           `stroke-width="${OUTSIDE_STROKE.toFixed(2)}" stroke-opacity="${OUTSIDE_OPACITY.toFixed(2)}" ` +
           `stroke-linejoin="round"/>`,
       );
@@ -395,10 +403,10 @@ export function renderMap({
   for (const g of geo) {
     const fill =
       targetBackground && g.isTarget
-        ? ` fill="${TARGET_FILL}" fill-opacity="${TARGET_FILL_OPACITY.toFixed(2)}"`
+        ? ` fill="${targetFill}" fill-opacity="${TARGET_FILL_OPACITY.toFixed(2)}"`
         : ` fill="none"`;
     out.push(
-      `<path d="${dOf(g.rings)}"${fill} stroke="${LINE}" ` +
+      `<path d="${dOf(g.rings)}"${fill} stroke="${line}" ` +
         `stroke-width="${strokeOf(g).toFixed(2)}" stroke-opacity="${opacityOf(g).toFixed(2)}" ` +
         `stroke-linejoin="round" stroke-linecap="round"/>`,
     );
@@ -411,10 +419,10 @@ export function renderMap({
       const opacity = outlineIsTarget ? 1 : CONTEXT_OPACITY_MAX;
       const fill =
         targetBackground && outlineIsTarget
-          ? ` fill="${TARGET_FILL}" fill-opacity="${TARGET_FILL_OPACITY.toFixed(2)}"`
+          ? ` fill="${targetFill}" fill-opacity="${TARGET_FILL_OPACITY.toFixed(2)}"`
           : ` fill="none"`;
       out.push(
-        `<path d="${dOf(p.rings)}"${fill} stroke="${LINE}" ` +
+        `<path d="${dOf(p.rings)}"${fill} stroke="${line}" ` +
           `stroke-width="${width.toFixed(2)}" stroke-opacity="${opacity.toFixed(2)}" stroke-linejoin="round"/>`,
       );
     }
@@ -427,12 +435,12 @@ export function renderMap({
     const font = fontByDepth.get(g.depth)!;
     out.push(
       `<text x="${g.cx.toFixed(1)}" y="${g.cy.toFixed(1)}" font-size="${font.toFixed(1)}" ` +
-        `text-anchor="middle" dominant-baseline="central" fill="${LINE}" fill-opacity="0.9" ` +
+        `text-anchor="middle" dominant-baseline="central" fill="${line}" fill-opacity="0.9" ` +
         `letter-spacing="1">${g.name}</text>`,
     );
   }
 
-  if (!title) return { markup: out.join("\n"), W, H, outside: outsideTotal, outsideTarget: outsideTargetDrawn };
+  if (!title) return { markup: out.join("\n"), W, H, bg, outside: outsideTotal, outsideTarget: outsideTargetDrawn };
 
   const tFont = Math.max(13, Math.min(30, W * 0.017));
   const sFont = tFont * 0.5;
@@ -449,25 +457,25 @@ export function renderMap({
   const tx = Math.max(pad, (W - (capW + (captionSub ? GAP + subW : 0))) / 2);
   out.push(
     `<text x="${tx.toFixed(1)}" y="${(offY + CAPTION_H - 12).toFixed(1)}" font-size="${tFont.toFixed(1)}" ` +
-      `font-weight="600" fill="${LINE}" fill-opacity="0.92" letter-spacing="${tracking}">${caption}</text>`,
+      `font-weight="600" fill="${line}" fill-opacity="0.92" letter-spacing="${tracking}">${caption}</text>`,
   );
   if (captionSub) {
     out.push(
       `<text x="${(tx + capW + GAP).toFixed(1)}" y="${(offY + CAPTION_H - 14).toFixed(1)}" ` +
-        `font-size="${sFont.toFixed(1)}" fill="${LINE}" fill-opacity="0.42">${captionSub}</text>`,
+        `font-size="${sFont.toFixed(1)}" fill="${line}" fill-opacity="0.42">${captionSub}</text>`,
     );
   }
 
-  return { markup: out.join("\n"), W, H, outside: outsideTotal, outsideTarget: outsideTargetDrawn };
+  return { markup: out.join("\n"), W, H, bg, outside: outsideTotal, outsideTarget: outsideTargetDrawn };
 }
 
 /** 给渲染结果套上 `<svg>` 外壳。 */
-export function wrapSvg({ markup, W, H }: RenderOutput): string {
+export function wrapSvg({ markup, W, H, bg = BG }: RenderOutput): string {
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" ` +
     `width="${W.toFixed(0)}" height="${H.toFixed(0)}" font-family="Noto Sans CJK SC, ` +
     `Microsoft YaHei, PingFang SC, sans-serif">\n` +
-    `<rect x="0" y="0" width="${W.toFixed(1)}" height="${H.toFixed(1)}" fill="${BG}"/>\n` +
+    `<rect x="0" y="0" width="${W.toFixed(1)}" height="${H.toFixed(1)}" fill="${bg}"/>\n` +
     `${markup}\n</svg>`
   );
 }

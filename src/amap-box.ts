@@ -391,6 +391,7 @@ export class AmapBox {
     const map = renderMap({
       units,
       outline,
+      colors: layout.colors,
       outside: outsideUnits,
       outsideTarget: targetUnits,
       ratio: layout.ratio,
@@ -452,6 +453,16 @@ export class AmapBox {
       throw new Error("padding 只接受非负数字");
     if (span.title !== undefined && typeof span.title !== "boolean")
       throw new Error("title 只接受布尔值");
+    if (span.colors !== undefined) {
+      const c = span.colors;
+      if (typeof c !== "object" || c === null)
+        throw new Error("colors 只接受 { background?, line?, targetFill? } 对象");
+      for (const k of ["background", "line", "targetFill"] as const) {
+        const v = c[k];
+        if (v !== undefined && (typeof v !== "string" || !v.trim()))
+          throw new Error(`colors.${k} 只接受非空字符串`);
+      }
+    }
     if (span.center !== undefined) {
       const c = span.center;
       const ok =

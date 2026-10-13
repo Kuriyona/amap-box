@@ -272,6 +272,20 @@ describe("generate", () => {
     await expect(box.generate("杭州市", { title: "yes" as never })).rejects.toThrow(/title/);
   });
 
+  it("配色：colors 透传到 SVG，非法值报错", async () => {
+    const { box } = makeEnv();
+    const [r] = await box.generate("杭州市", {
+      up: 0,
+      down: 0,
+      colors: { background: "#001122", line: "#abcdef", targetFill: "#ff0000" },
+    });
+    expect(r.svg).toContain('fill="#001122"');
+    expect(r.svg).toContain('stroke="#abcdef"');
+    expect(r.svg).toContain('fill="#ff0000"');
+    await expect(box.generate("杭州市", { colors: { line: "" } })).rejects.toThrow(/colors\.line/);
+    await expect(box.generate("杭州市", { colors: "dark" as never })).rejects.toThrow(/colors/);
+  });
+
   it("非法跨度报错", async () => {
     const { box } = makeEnv();
     await expect(box.generate("杭州市", { down: 2 as never })).rejects.toThrow(/down/);
