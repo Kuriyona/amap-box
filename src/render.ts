@@ -2,6 +2,7 @@
  * 渲染：把行政区环投影成 SVG 线稿。纯函数，无 IO。
  */
 import { centroid, pointInRing, signedArea, simplify, type Point, type Unit } from "./geometry.js";
+import type { MapRatio } from "./types.js";
 
 export const BG = "#0d1117";
 export const LINE = "#ffffff";
@@ -19,6 +20,17 @@ export const CAPTION_H = 46;
 export const MAP_LONG = 1000; // 图形长边 -> 1000px
 export const TOL = 0.75; // 抽稀容差(px)
 export const MIN_RING_AREA = 2; // 小于此面积的环（小岛）直接丢弃
+
+/** 归一化画幅比例：`"auto"` | 正数 | `"W:H"` -> `"auto"` 或数字；无法解析返回 `null`。 */
+export function parseRatio(v: MapRatio): number | "auto" | null {
+  if (v === "auto") return "auto";
+  if (typeof v === "number") return Number.isFinite(v) && v > 0 ? v : null;
+  const m = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(v);
+  if (!m) return null;
+  const w = Number(m[1]);
+  const h = Number(m[2]);
+  return w > 0 && h > 0 ? w / h : null;
+}
 
 /** 待绘制单元，带图内相对层级。 */
 export interface RenderUnit extends Unit {
@@ -38,6 +50,12 @@ export interface RenderInput {
    * 外部轮廓候选：与「最外层级」同级、落在当前视图内的会以更细更淡的线条画出（不参与缩放，也不加标签）。
    */
   outside?: RenderUnit[];
+  /** 画幅宽高比，默认 `"auto"`（按内容）。 */
+  ratio?: MapRatio;
+  /** 内容四周留白（px），默认 `PAD`。 */
+  padding?: number;
+  /** 是否绘制标题（含副标题），默认 `true`。 */
+  title?: boolean;
 }
 
 export interface RenderOutput {
@@ -63,6 +81,9 @@ export function renderMap({
   chain = [],
   target = null,
   outside = [],
+  ratio = "auto",
+  padding = PAD,
+  title = true,
 }: RenderInput): RenderOutput | null {
   const sample = units.flatMap((u) => u.rings).flat();
   if (!sample.length) return null;
@@ -84,12 +105,31 @@ export function renderMap({
   const dx = maxx - minx;
   const dy = maxy - miny;
   const scale = MAP_LONG / Math.max(dx, dy); // 长边 -> 1000px
-  const W = dx * scale + 2 * PAD;
-  const H = dy * scale + CAPTION_H + 2 * PAD;
+  const pad = Math.max(0, padding);
+  const band = title ? CAPTION_H : 0; // 顶部标题带
+  const boxW = dx * scale + 2 * pad; // 内容盒（含留白与标题带）
+  const boxH = dy * scale + band + 2 * pad;
+  // 画幅比例：auto 直接用内容盒；给定比例时内容缩放不变，居中后把多余空间作为留白补到画布
+  let W = boxW;
+  let H = boxH;
+  let offX = 0;
+  let offY = 0;
+  const r = parseRatio(ratio) ?? "auto";
+  if (r !== "auto") {
+    if (boxW / boxH > r) {
+      W = boxW;
+      H = boxW / r;
+    } else {
+      W = boxH * r;
+      H = boxH;
+    }
+    offX = (W - boxW) / 2;
+    offY = (H - boxH) / 2;
+  }
   // 北向上
   const toPx = ([lon, lat]: [number, number]): Point => [
-    PAD + (lon2x(lon) - minx) * scale,
-    CAPTION_H + PAD + (maxy - lat) * scale,
+    offX + pad + (lon2x(lon) - minx) * scale,
+    offY + band + pad + (maxy - lat) * scale,
   ];
 
   const project = (units0: Unit) => {
@@ -233,6 +273,8 @@ export function renderMap({
     );
   }
 
+  if (!title) return { markup: out.join("\n"), W, H, outside: outsideLayer.length };
+
   const tFont = Math.max(13, Math.min(30, W * 0.017));
   const sFont = tFont * 0.5;
   const tracking = caption.length > 3 ? 3 : 1;
@@ -245,14 +287,14 @@ export function renderMap({
   const capW = textW(caption, tFont) + (caption.length - 1) * tracking;
   const subW = captionSub ? textW(captionSub, sFont) : 0;
   const GAP = 18;
-  const tx = Math.max(PAD, (W - (capW + (captionSub ? GAP + subW : 0))) / 2);
+  const tx = Math.max(pad, (W - (capW + (captionSub ? GAP + subW : 0))) / 2);
   out.push(
-    `<text x="${tx.toFixed(1)}" y="${(CAPTION_H - 12).toFixed(1)}" font-size="${tFont.toFixed(1)}" ` +
+    `<text x="${tx.toFixed(1)}" y="${(offY + CAPTION_H - 12).toFixed(1)}" font-size="${tFont.toFixed(1)}" ` +
       `font-weight="600" fill="${LINE}" fill-opacity="0.92" letter-spacing="${tracking}">${caption}</text>`,
   );
   if (captionSub) {
     out.push(
-      `<text x="${(tx + capW + GAP).toFixed(1)}" y="${(CAPTION_H - 14).toFixed(1)}" ` +
+      `<text x="${(tx + capW + GAP).toFixed(1)}" y="${(offY + CAPTION_H - 14).toFixed(1)}" ` +
         `font-size="${sFont.toFixed(1)}" fill="${LINE}" fill-opacity="0.42">${captionSub}</text>`,
     );
   }

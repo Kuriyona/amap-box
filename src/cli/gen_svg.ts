@@ -18,6 +18,9 @@ const USAGE = `用法: amap-box <行政区名|adcode> [选项]
   --down <0|1>   往下细分几级       (默认 1；0 = 只画目标自身)
   --chain        等价于 --up max
   --outside      拓展外部轮廓：把「最外层级」同级、落在视图内的相邻区域一并画出（不往下细分）
+  --ratio <auto|W:H|N>  画幅宽高比   (默认 auto = 按内容；如 1、16:9)
+  --padding <N>  内容四周留白(px)    (默认 24)
+  --no-title     不画标题            (默认画)
   --out <dir>    输出目录            (默认 out)
   --cache <dir>  边界+索引缓存目录     (默认 districts)
   --refresh      忽略缓存，重新拉取（含重建全国索引）
@@ -25,12 +28,24 @@ const USAGE = `用法: amap-box <行政区名|adcode> [选项]
 索引: <cache>/index.json 首次运行一次请求生成，之后查找/层级只走它`;
 
 async function main() {
-  const flags: { out: string; cache: string; refresh: boolean; chain: boolean; outside: boolean; up?: string; down?: string } = {
+  const flags: {
+    out: string;
+    cache: string;
+    refresh: boolean;
+    chain: boolean;
+    outside: boolean;
+    noTitle: boolean;
+    ratio?: string;
+    padding?: string;
+    up?: string;
+    down?: string;
+  } = {
     out: "out",
     cache: "districts",
     refresh: false,
     chain: false,
     outside: false,
+    noTitle: false,
   };
   let keyword: string | null = null;
   const argv = process.argv.slice(2);
@@ -42,6 +57,9 @@ async function main() {
     else if (a === "--down") flags.down = argv[++i];
     else if (a === "--chain") flags.chain = true;
     else if (a === "--outside") flags.outside = true;
+    else if (a === "--no-title") flags.noTitle = true;
+    else if (a === "--ratio") flags.ratio = argv[++i];
+    else if (a === "--padding") flags.padding = argv[++i];
     else if (a === "--refresh") flags.refresh = true;
     else if (a === "-h" || a === "--help") {
       console.log(USAGE);
@@ -82,6 +100,29 @@ async function main() {
     }
   }
 
+  // 版式：比例 / 留白 / 标题
+  let ratio: number | "auto" | undefined;
+  if (flags.ratio !== undefined) {
+    const v = String(flags.ratio).trim().toLowerCase();
+    const wh = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(v);
+    if (v === "auto") ratio = "auto";
+    else if (wh && Number(wh[1]) > 0 && Number(wh[2]) > 0) ratio = Number(wh[1]) / Number(wh[2]);
+    else if (/^\d+(?:\.\d+)?$/.test(v) && Number(v) > 0) ratio = Number(v);
+    else {
+      console.error(`--ratio 只接受 auto、W:H 或正数，收到: ${flags.ratio}\n\n${USAGE}`);
+      process.exit(2);
+    }
+  }
+  let padding: number | undefined;
+  if (flags.padding !== undefined) {
+    const v = String(flags.padding).trim();
+    if (/^\d+(?:\.\d+)?$/.test(v)) padding = Number(v);
+    else {
+      console.error(`--padding 只接受非负数字，收到: ${flags.padding}\n\n${USAGE}`);
+      process.exit(2);
+    }
+  }
+
   const KEY = loadKey();
   if (!KEY) {
     console.error("缺少高德 key：设置环境变量 AMAP_KEY，或在 .env 写入 KEY=...");
@@ -92,7 +133,15 @@ async function main() {
 
   let generated;
   try {
-    generated = await box.generate(keyword, { up: upReq, down: downReq, outside: flags.outside, refresh: flags.refresh });
+    generated = await box.generate(keyword, {
+      up: upReq,
+      down: downReq,
+      outside: flags.outside,
+      ratio,
+      padding,
+      title: !flags.noTitle,
+      refresh: flags.refresh,
+    });
   } catch (e) {
     console.error(e instanceof Error ? e.message : String(e));
     process.exit(1);
@@ -106,11 +155,14 @@ async function main() {
     if (!r.svg) continue;
     const file = join(flags.out, r.file);
     writeFileSync(file, r.svg);
-    console.log(
-      `  已写入 ${file}  （往上 ${r.up} 级 / 往下 ${r.down} 级；${r.blocks} 个区块${
-        r.outline ? " + 整体轮廓" : ""
-      }${r.neighbors ? ` + ${r.neighbors} 个外部轮廓` : ""}）`,
-    );
+    const bits = [
+      `往上 ${r.up} 级 / 往下 ${r.down} 级`,
+      `${r.blocks} 个区块${r.outline ? " + 整体轮廓" : ""}${r.neighbors ? ` + ${r.neighbors} 个外部轮廓` : ""}`,
+    ];
+    if (flags.ratio !== undefined) bits.push(`画幅 ${flags.ratio}`);
+    if (flags.padding !== undefined) bits.push(`留白 ${flags.padding}px`);
+    if (flags.noTitle) bits.push("无标题");
+    console.log(`  已写入 ${file}  （${bits.join("；")}）`);
     written++;
   }
 

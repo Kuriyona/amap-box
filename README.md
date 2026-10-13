@@ -56,7 +56,7 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
 | 方法 | 说明 |
 |---|---|
 | `resolve(keyword, refresh?)` | 名称 / adcode → `{ regions, notes }`。先查索引，索引里没有的（乡镇 / 街道级）回落在线查询 |
-| `generate(keyword, { up?, down?, outside?, refresh? })` | 每个命中出一张图，返回 `GenerateResult[]`（不落盘，`svg` 给你自己写） |
+| `generate(keyword, { up?, down?, outside?, ratio?, padding?, title?, refresh? })` | 每个命中出一张图，返回 `GenerateResult[]`（不落盘，`svg` 给你自己写） |
 | `ready(refresh?)` | 只预热全国索引 |
 
 `GenerateResult` 字段：
@@ -77,14 +77,19 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
 - `down`：往下细分几级，只允许 `0 | 1`，默认 `1`；`0` = 只画目标自身。
 - `outside`：是否拓展外部轮廓，默认 `false`。启用后把**最外层级**（`R(d-up)`，如 杭州 u1 / 浙江 u0 都是浙江省）
   同级的其他行政区中、落在当前视图内的那些轮廓也画出来（更细更淡、不加标签、不往下细分、不改变缩放），让图更完整。
+- `ratio`：画幅宽高比，默认 `"auto"`（按内容）。可给正数或 `"16:9"`；给定时内容按长边 `1000px` 缩放后居中，
+  多余空间补成留白，内容本身不重新缩放。
+- `padding`：内容四周留白（px），默认 `24`。
+- `title`：是否绘制标题（含副标题），默认 `true`。
 - `refresh`：忽略缓存重新拉取（含重建全国索引）。
 
 失败语义：**没有匹配** → `throw`；某个命中**画不出来** → 该项 `svg: null` 并附 `notes`，不影响其余。
 
 ### 纯函数导出
 
-`svgFileName`、`parsePolyline` / `toUnit` / `signedArea` / `centroid` / `pointInRing` / `simplify`、
-`renderMap` / `wrapSvg`，以及 `AmapBoxOptions` / `AmapCache` / `AmapFetch` / `GenerateResult` 等类型。
+`svgFileName`、`parseRatio`、`parsePolyline` / `toUnit` / `signedArea` / `centroid` / `pointInRing` / `simplify`、
+`renderMap` / `wrapSvg`，以及 `AmapBoxOptions` / `AmapCache` / `AmapFetch` / `SpanOptions` / `LayoutOptions` /
+`MapRatio` / `GenerateResult` 等类型。
 
 ## CLI
 
@@ -99,6 +104,9 @@ amap-box <行政区名|adcode> [选项]
 | `--down <0\|1>` | 往下细分几级（`0` = 只画目标自身） | `1` |
 | `--chain` | 等价于 `--up max` | — |
 | `--outside` | 拓展外部轮廓：把「最外层级」同级、视图内的其他行政区轮廓也画出（更细更淡，不往下细分） | — |
+| `--ratio <auto\|W:H\|N>` | 画幅宽高比（`auto` = 按内容；如 `1`、`16:9`） | `auto` |
+| `--padding <N>` | 内容四周留白（px） | `24` |
+| `--no-title` | 不画标题 | — |
 | `--out <dir>` | 输出目录 | `out` |
 | `--cache <dir>` | 边界 + 索引缓存目录 | `districts` |
 | `--refresh` | 忽略缓存重新拉取（含重建全国索引） | — |
@@ -112,6 +120,7 @@ amap-box 杭州市 --up 1 --down 1 # 浙江省 11 市 + 杭州市 13 区县，�
 amap-box 杭州市 --up max        # 34 省 + 11 市 + 13 区县，轮廓 = 国家级
 amap-box 330100 --down 0        # 只有杭州市轮廓
 amap-box 杭州市 --up 1 --outside # 浙江省 11 市 + 杭州市 13 区县，外圈再补上视图内的相邻省份
+amap-box 杭州市 --ratio 1 --no-title  # 1:1 画幅、不画标题（适合当图标/贴图）
 amap-box 朝阳区                 # 同名多结果各出一张，靠 adcode 区分
 bun src/cli/gen_svg.ts 杭州市   # 仓库内开发：直接跑源码，无需构建
 ```
@@ -142,6 +151,8 @@ amap-box-review 杭州市 上海市 朝阳区    # 指定目标（同名多结�
 - **查询链高亮**：目标自身与图上画到的链路祖先，线更粗、不透明度拉满。
 - **外部轮廓**（`outside`）：把最外层级 `R(d-up)` 同级、落在视图内的相邻区域也描一遍（更细更淡、无标签）；
   `R(d-up)` 已是国家级时没有同级。
+- **版式**：内容长边固定 `1000px`，留白 `padding`（默认 `24`），顶部标题带（`title: false` 时去掉）；
+  `ratio` 只决定画布宽高比，给定时内容不重新缩放，居中后把多余空间补成留白。
 - 线宽、字号都按图内相对层级统一推导。
 
 ## 缓存

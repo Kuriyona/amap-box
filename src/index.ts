@@ -25,6 +25,8 @@ export type {
   AmapCache,
   AmapBoxOptions,
   SpanOptions,
+  LayoutOptions,
+  MapRatio,
   ResolveResult,
   GenerateResult,
 } from "./types.js";
@@ -44,6 +46,7 @@ export {
 export {
   renderMap,
   wrapSvg,
+  parseRatio,
   BG,
   LINE,
   type RenderUnit,

@@ -209,6 +209,19 @@ describe("generate", () => {
     expect(r.notes.join("\n")).toContain("没有同级相邻区域");
   });
 
+  it("版式：ratio / padding / title 生效，非法值报错", async () => {
+    const { box } = makeEnv();
+    const [on] = await box.generate("杭州市", { up: 0, down: 0 });
+    expect(on.svg).toContain(">330100</text>"); // captionSub 在标题行
+    const [off] = await box.generate("杭州市", { up: 0, down: 0, title: false, ratio: 1, padding: 0 });
+    expect(off.svg).not.toContain(">330100</text>");
+    const m = off.svg!.match(/width="(\d+)" height="(\d+)"/)!;
+    expect(Math.abs(+m[1]! - +m[2]!)).toBeLessThanOrEqual(1); // 1:1
+    await expect(box.generate("杭州市", { ratio: "1:0" })).rejects.toThrow(/ratio/);
+    await expect(box.generate("杭州市", { padding: -1 })).rejects.toThrow(/padding/);
+    await expect(box.generate("杭州市", { title: "yes" as never })).rejects.toThrow(/title/);
+  });
+
   it("非法跨度报错", async () => {
     const { box } = makeEnv();
     await expect(box.generate("杭州市", { down: 2 as never })).rejects.toThrow(/down/);

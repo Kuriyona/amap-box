@@ -40,10 +40,12 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
 
 - **构造参数**（对象形式，只有这三个）：`Key`（string）、`fetch`（`(url) => object`）、`cache`（`{ read(key), write(key, value) }`，read/write 允许同步或返回 Promise）。
 - `resolve(keyword, refresh?)` → `{ regions, notes }`：名称/adcode → 命中的行政区（索引优先，未命中回落在线查询）。
-- `generate(keyword, { up?, down?, outside?, refresh? })` → `GenerateResult[]`：每个命中一张图。
+- `generate(keyword, { up?, down?, outside?, ratio?, padding?, title?, refresh? })` → `GenerateResult[]`：每个命中一张图。
   - `up` 默认 `0`（`"max"` = 到国家级，超过目标深度会被夹到深度）；`down` 只允许 `0 | 1`，默认 `1`。
   - `outside` 默认 `false`：拓展外部轮廓，把「最外层级」（`R(d-up)`，如 杭州 u1 / 浙江 u0 都是浙江省）同级、
     落在当前视图内的其他行政区轮廓也画出来（更细更淡、不加标签、不往下细分、不改变缩放）。
+  - 版式：`ratio` 默认 `"auto"`（画幅宽高比，可给正数或 `"16:9"`；给定时内容按长边 1000px 缩放后居中，
+    多余空间作为留白补到画布）、`padding` 默认 `24`（内容四周留白 px）、`title` 默认 `true`（是否画标题）。
   - 每项：`query` / `landed`（实际落到的行政区）、`up` / `down`（解析后）、`file`（建议文件名）、`svg`（文本，失败为 `null`）、`blocks`、`outline`、`neighbors`（画出的外部轮廓区块数）、`notes`。
   - 找不到匹配 → `throw`；某一张画不出来 → 该项 `svg: null` + `notes` 说明，不中断其余。
   - 解析层提示（索引构建、匹配上限、限流重试）只挂在第一个结果上，避免多命中时重复。
@@ -53,7 +55,7 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
 ## CLI 运行
 
 ```bash
-bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outside] [--out <dir>] [--cache <dir>] [--refresh]
+bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outside] [--ratio auto|W:H|N] [--padding N] [--no-title] [--out <dir>] [--cache <dir>] [--refresh]
 # 或装好之后：amap-box <行政区名|adcode> [选项]
 ```
 
@@ -66,6 +68,9 @@ bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outsid
 | `--down <0\|1>` | 往下细分几级（`0` = 只画目标自身） | `1` |
 | `--chain` | 等价于 `--up max` | — |
 | `--outside` | 拓展外部轮廓：把「最外层级」同级、视图内的其他行政区轮廓也画出（更细更淡，不往下细分） | — |
+| `--ratio <auto\|W:H\|N>` | 画幅宽高比（`auto` = 按内容；如 `1`、`16:9`） | `auto` |
+| `--padding <N>` | 内容四周留白（px） | `24` |
+| `--no-title` | 不画标题 | — |
 | `--out` / `--cache` | 输出目录 / 边界+索引缓存目录 | `out` / `districts` |
 | `--refresh` | 忽略缓存重新拉取（含重建全国索引） | — |
 
@@ -107,6 +112,9 @@ CLI 的磁盘缓存把键映射成 `<cache>/<key>.json`（键 `index` 与 `<adco
   （即落在当前视图内）的那些轮廓也画出来，线细（`1.0`）、淡（`opacity 0.3`）、不加标签，也不参与缩放与层级推导；
   相邻区域与本图最外层共享边界，所以探进视图的邻居会被自然裁到画布边缘，形成"更完整地图"的感觉。
   `R(d-up)` 已是国家级（如 中国、浙江 u1）时没有同级，无效果。
+- **版式**：内容长边固定缩放到 `MAP_LONG = 1000px`，四周留白 `padding`（默认 `24`），顶部标题带 `CAPTION_H = 46`
+  （`title: false` 时标题与标题带一起去掉）；`ratio`（默认 `"auto"`）只决定画布宽高比 —— 给定时内容**不重新缩放**，
+  居中后把多余空间补成留白，所以 `auto` 与任何比例下内容的实际尺寸一致。
 
 组合示例（目标 = 杭州市，d=2）：
 
@@ -230,7 +238,7 @@ bun src/cli/review.ts --out review --html review.html --cache districts --refres
 | `src/types.ts` | 公共类型：`AmapBoxOptions` / `AmapFetch` / `AmapCache` / `SpanOptions` / `GenerateResult` … |
 | `src/amap-box.ts` | `AmapBox` 类：API 取数（`apiQuery` + 限流退避）、缓存读写、全国索引、`resolve` / `generate`；`svgFileName` |
 | `src/geometry.ts` | 纯几何：`parsePolyline` / `toUnit` / `signedArea` / `centroid` / `pointInRing` / `simplify` |
-| `src/render.ts` | `renderMap`（投影 → 抽稀 → 分层线宽 → 同级统一字号 → 拼 SVG）与 `wrapSvg` |
+| `src/render.ts` | `renderMap`（投影 → 抽稀 → 分层线宽 → 同级统一字号 → 版式/画幅 → 拼 SVG）与 `wrapSvg`、`parseRatio` |
 | `src/index.ts` | 公共导出入口 |
 | `src/cli/common.ts` | CLI 共用：`loadKey` / `diskCache` / `nodeFetch` |
 | `src/cli/gen_svg.ts` | 出图 CLI（解析跨度参数、写文件） |

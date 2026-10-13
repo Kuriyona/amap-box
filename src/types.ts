@@ -39,8 +39,21 @@ export interface AmapBoxOptions {
   cache: AmapCache;
 }
 
-/** 出图跨度。 */
-export interface SpanOptions {
+/** 画幅比例：`"auto"`（按内容）或正数宽高比 W/H；也接受 `"16:9"` 这样的字符串。 */
+export type MapRatio = number | "auto" | `${number}:${number}`;
+
+/** 出图版式（画幅）。 */
+export interface LayoutOptions {
+  /** 画幅宽高比。默认 `"auto"`：由内容包围盒 + 留白 + 标题带决定。 */
+  ratio?: MapRatio;
+  /** 内容四周留白（px）。默认 `24`。 */
+  padding?: number;
+  /** 是否绘制标题（含副标题）。默认 `true`。 */
+  title?: boolean;
+}
+
+/** 出图跨度与版式。 */
+export interface SpanOptions extends LayoutOptions {
   /** 往上包含几级祖先；`"max"` = 一直到国家级。默认 `0`。 */
   up?: number | "max";
   /** 往下细分几级，只允许 `0 | 1`。默认 `1`。 */

@@ -4,9 +4,9 @@
  * 构造：`new AmapBox({ Key, fetch, cache })`。取数与缓存都由调用方注入，
  * 因此在 Node / Bun / 浏览器 / 测试里都能用同一份逻辑。
  */
-import type { AmapDistrict, AmapBoxOptions, GenerateResult, ResolveResult, SpanOptions } from "./types.js";
+import type { AmapDistrict, AmapBoxOptions, GenerateResult, LayoutOptions, ResolveResult, SpanOptions } from "./types.js";
 import { toUnit, type Unit } from "./geometry.js";
-import { renderMap, wrapSvg, type RenderUnit } from "./render.js";
+import { parseRatio, renderMap, wrapSvg, type RenderUnit } from "./render.js";
 
 const API = "https://restapi.amap.com/v3/config/district";
 const COUNTRY = "100000";
@@ -228,6 +228,7 @@ export class AmapBox {
     refresh: boolean,
     shared: string[],
     outside: boolean,
+    layout: LayoutOptions,
   ): Promise<GenerateResult> {
     const query = { name: root.name, adcode: root.adcode, level: root.level ?? "" };
     const local: string[] = [];
@@ -313,6 +314,9 @@ export class AmapBox {
       units,
       outline,
       outside: neighbors,
+      ratio: layout.ratio,
+      padding: layout.padding,
+      title: layout.title,
       chain: chain.map((n) => n.region.adcode),
       target: landed.adcode,
       caption: landed.name,
@@ -356,13 +360,19 @@ export class AmapBox {
     if (upReq !== "max" && (!Number.isInteger(upReq) || (upReq as number) < 0))
       throw new Error("up 只接受非负整数或 max");
     if (downReq !== 0 && downReq !== 1) throw new Error("down 只接受 0 或 1（最多往下 1 级）");
+    if (span.ratio !== undefined && parseRatio(span.ratio) === null)
+      throw new Error('ratio 只接受 "auto"、正数或 "W:H"');
+    if (span.padding !== undefined && (!Number.isFinite(span.padding) || span.padding < 0))
+      throw new Error("padding 只接受非负数字");
+    if (span.title !== undefined && typeof span.title !== "boolean")
+      throw new Error("title 只接受布尔值");
 
     const { regions, notes } = await this.resolve(keyword, !!span.refresh);
     if (!regions.length) throw new Error(`没有匹配「${keyword}」的行政区`);
     const out: GenerateResult[] = [];
     for (let i = 0; i < regions.length; i++) {
       // 解析层的提示（索引构建/匹配上限/限流）只挂在第一个结果上，避免多命中时重复
-      out.push(await this.#renderOne(regions[i], upReq, downReq, !!span.refresh, i === 0 ? notes : [], !!span.outside));
+      out.push(await this.#renderOne(regions[i], upReq, downReq, !!span.refresh, i === 0 ? notes : [], !!span.outside, span));
     }
     return out;
   }

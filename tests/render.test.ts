@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { renderMap, wrapSvg, type RenderUnit } from "../src/render.js";
+import { CAPTION_H, PAD, renderMap, wrapSvg, type RenderUnit } from "../src/render.js";
 
 const square = (x: number, s: number) => [
   [120 + x, 30],
@@ -56,6 +56,45 @@ describe("renderMap", () => {
     expect(countLabels(map.markup)).toBe(1); // 外部轮廓不加标签
     expect(map.markup).not.toContain(">邻区</text>");
     expect(map.markup).not.toContain(">远区</text>");
+  });
+
+  it("画幅比例：数字与 \"W:H\" 都归一化为宽高比，且不改变内容缩放", () => {
+    const u = unit("杭州市", "330100", 0);
+    const bbox = (markup: string) => {
+      const d = markup.match(/<path d="([^"]+)"/)![1];
+      const n = [...d.matchAll(/(-?\d+\.\d),(-?\d+\.\d)/g)].map((m) => [+m[1]!, +m[2]!]);
+      const xs = n.map((p) => p[0]!);
+      const ys = n.map((p) => p[1]!);
+      return { w: Math.max(...xs) - Math.min(...xs), h: Math.max(...ys) - Math.min(...ys) };
+    };
+    const auto = renderMap({ units: [u], outline: null, caption: "杭州市" })!;
+    const one = renderMap({ units: [u], outline: null, caption: "杭州市", ratio: 1 })!;
+    const wide = renderMap({ units: [u], outline: null, caption: "杭州市", ratio: "16:9" })!;
+    expect(one.W).toBeCloseTo(one.H, 6);
+    expect(wide.W / wide.H).toBeCloseTo(16 / 9, 6);
+    // 比例只改画布，内容长边仍是 1000px
+    const a = bbox(auto.markup);
+    const o = bbox(one.markup);
+    expect(o.w).toBeCloseTo(a.w, 6);
+    expect(o.h).toBeCloseTo(a.h, 6);
+  });
+
+  it("title:false 去掉标题与标题带", () => {
+    const u = unit("A", "1", 0);
+    const on = renderMap({ units: [u], outline: null, caption: "A", captionSub: "330100" })!;
+    const off = renderMap({ units: [u], outline: null, caption: "A", captionSub: "330100", title: false })!;
+    expect(on.markup).toContain(">330100</text>");
+    expect(off.markup).not.toContain(">330100</text>");
+    expect(off.markup).toContain(">A</text>"); // 区块标签仍在
+    expect(on.H - off.H).toBeCloseTo(CAPTION_H, 6);
+  });
+
+  it("padding 可配置，默认 PAD", () => {
+    const u = unit("A", "1", 0);
+    const def = renderMap({ units: [u], outline: null, caption: "A" })!;
+    const zero = renderMap({ units: [u], outline: null, caption: "A", padding: 0 })!;
+    expect(def.W - zero.W).toBeCloseTo(2 * PAD, 6);
+    expect(def.H - zero.H).toBeCloseTo(2 * PAD, 6);
   });
 
   it("captionSub 附加到标题行", () => {
