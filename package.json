@@ -1,0 +1,60 @@
+{
+  "name": "@kuriyona/amap-box",
+  "version": "0.1.0",
+  "description": "高德行政区划 → SVG 深色线稿地图（JS API + CLI）",
+  "type": "module",
+  "license": "MIT",
+  "author": "Kuriyona",
+  "keywords": ["amap", "gaode", "district", "svg", "map", "高德", "行政区划"],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Kuriyona/amap-box.git"
+  },
+  "homepage": "https://github.com/Kuriyona/amap-box#readme",
+  "bugs": {
+    "url": "https://github.com/Kuriyona/amap-box/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "files": ["dist"],
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.mjs",
+  "types": "./dist/index.d.mts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.mts",
+        "default": "./dist/index.mjs"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "amap-box": "./dist/cli/gen_svg.mjs",
+    "amap-box-review": "./dist/cli/review.mjs"
+  },
+  "scripts": {
+    "build": "tsdown",
+    "prepublishOnly": "tsdown",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "gen": "bun src/cli/gen_svg.ts",
+    "review": "bun src/cli/review.ts"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsdown": "^0.23.1",
+    "typescript": "^5.7.2",
+    "vitest": "^3.0.5"
+  }
+}

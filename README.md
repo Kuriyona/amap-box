@@ -1,0 +1,174 @@
+# @kuriyona/amap-box
+
+高德行政区划 → SVG 深色线稿地图。同一份核心逻辑，两种用法：**JS API** 与 **CLI**。
+
+给一个行政区名或 adcode（`杭州市`、`330100`），得到深色底、白色线稿的行政区划图：
+可以往上带若干级祖先，也可以往下细分一级。
+
+- **JS API**：`new AmapBox({ Key, fetch, cache })` —— 取数与缓存都由调用方注入，Node / Bun / 浏览器 / 测试里同一套逻辑。
+- **CLI**：`amap-box` 出图，`amap-box-review` 出人工审阅页。
+- 无运行时依赖（只用平台原生 `fetch` 与你注入的缓存）；ESM + CJS + 类型声明。
+- 首次运行拉一份**全国行政区划索引**（一次请求，不含边界），之后名称查找与层级链 **0 请求**。
+- 接口限流自动退避重试。
+
+## 安装
+
+```bash
+npm install @kuriyona/amap-box
+# 或
+bun add @kuriyona/amap-box
+```
+
+## JS API
+
+```ts
+import { mkdirSync, readFileSync, writeFileSync, existsSync } from "node:fs";
+import { AmapBox } from "@kuriyona/amap-box";
+
+const box = new AmapBox({
+  Key: process.env.AMAP_KEY!,
+  // 输入完整 URL（已含 key），返回**已解析**的响应对象
+  fetch: (url) => fetch(url).then((r) => r.json()),
+  // 键值缓存，值一律是字符串
+  cache: {
+    read: (key) => (existsSync(`.amap/${key}.json`) ? readFileSync(`.amap/${key}.json`, "utf8") : null),
+    write: (key, value) => {
+      mkdirSync(".amap", { recursive: true });
+      writeFileSync(`.amap/${key}.json`, value);
+    },
+  },
+});
+
+const maps = await box.generate("杭州市", { up: 1, down: 1 });
+for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
+```
+
+### 构造参数
+
+| 参数 | 类型 | 说明 |
+|---|---|---|
+| `Key` | `string` | 高德 Web 服务 key |
+| `fetch` | `(url: string) => object \| Promise<object>` | 给定完整 URL（已含 key），返回**已解析**的响应对象 |
+| `cache` | `{ read(key), write(key, value) }` | 键值缓存。`read` 返回 `string \| null \| undefined \| Promise<…>`，`write` 返回 `void \| Promise<void>`；值一律是字符串（库内部 JSON 序列化）。键为 `"index"`（全国索引）与各 `<adcode>` |
+
+### 方法
+
+| 方法 | 说明 |
+|---|---|
+| `resolve(keyword, refresh?)` | 名称 / adcode → `{ regions, notes }`。先查索引，索引里没有的（乡镇 / 街道级）回落在线查询 |
+| `generate(keyword, { up?, down?, refresh? })` | 每个命中出一张图，返回 `GenerateResult[]`（不落盘，`svg` 给你自己写） |
+| `ready(refresh?)` | 只预热全国索引 |
+
+`GenerateResult` 字段：
+
+| 字段 | 说明 |
+|---|---|
+| `query` / `landed` | 关键字命中的行政区 / **实际落到**的行政区（乡镇、街道级会退到所属区县） |
+| `up` / `down` | 解析后的跨度（`up` 超过目标深度时会被夹到深度） |
+| `file` | 建议文件名 `[名称]-[adcode]-u<K>d<M>.svg` |
+| `svg` | SVG 文本；这张画不出来时为 `null` |
+| `blocks` / `outline` | 区块数 / 是否带整体轮廓 |
+| `notes` | 提示与警告（索引构建、匹配上限、限流重试、无边界数据…） |
+
+跨度选项：
+
+- `up`：往上包含几级祖先，默认 `0`；`"max"` = 一直到国家级。
+- `down`：往下细分几级，只允许 `0 | 1`，默认 `1`；`0` = 只画目标自身。
+- `refresh`：忽略缓存重新拉取（含重建全国索引）。
+
+失败语义：**没有匹配** → `throw`；某个命中**画不出来** → 该项 `svg: null` 并附 `notes`，不影响其余。
+
+### 纯函数导出
+
+`svgFileName`、`parsePolyline` / `toUnit` / `signedArea` / `centroid` / `pointInRing` / `simplify`、
+`renderMap` / `wrapSvg`，以及 `AmapBoxOptions` / `AmapCache` / `AmapFetch` / `GenerateResult` 等类型。
+
+## CLI
+
+```bash
+npm install -g @kuriyona/amap-box   # 提供 amap-box 与 amap-box-review
+amap-box <行政区名|adcode> [选项]
+```
+
+| 选项 | 含义 | 默认 |
+|---|---|---|
+| `--up <N\|max>` | 往上包含几级祖先（`max` = 一直到国家级） | `0` |
+| `--down <0\|1>` | 往下细分几级（`0` = 只画目标自身） | `1` |
+| `--chain` | 等价于 `--up max` | — |
+| `--out <dir>` | 输出目录 | `out` |
+| `--cache <dir>` | 边界 + 索引缓存目录 | `districts` |
+| `--refresh` | 忽略缓存重新拉取（含重建全国索引） | — |
+
+Key 来源：环境变量 `AMAP_KEY`，或当前目录 `.env` 里的 `KEY=...`。
+出图名一律 `[名称]-[adcode]-u<K>d<M>.svg`，写入 `--out`；`adcode` 天然唯一，重名与不同跨度都不会互相覆盖。
+
+```bash
+amap-box 杭州市                 # 杭州市的 13 个区县（默认 up0 down1）
+amap-box 杭州市 --up 1 --down 1 # 浙江省 11 市 + 杭州市 13 区县，轮廓 = 浙江省
+amap-box 杭州市 --up max        # 34 省 + 11 市 + 13 区县，轮廓 = 国家级
+amap-box 330100 --down 0        # 只有杭州市轮廓
+amap-box 朝阳区                 # 同名多结果各出一张，靠 adcode 区分
+bun src/cli/gen_svg.ts 杭州市   # 仓库内开发：直接跑源码，无需构建
+```
+
+### 审阅页
+
+```bash
+amap-box-review                        # 默认 = 中国 / 浙江省 / 杭州市 / 临安区
+amap-box-review 杭州市 上海市 朝阳区    # 指定目标（同名多结果会各出一张）
+```
+
+把一个目标的**全部跨度组合**（`up ∈ [0..d] × down ∈ {0,1}`）出一遍，汇成一个可在浏览器里逐张查看、
+缩放平移、逐张写评语的页面（评语存 `localStorage`，可一键导出汇总文本）。产物 `review/` 与 `review.html`
+都是可再生产物，随时可删。
+
+## 层级模型
+
+一共 4 级：**国家级(0) → 省级(1) → 地级(2) → 县级(3)**。目标是第 `d` 级。
+
+```
+绘制的级   ℓ ∈ [d-up+1, d+down]
+整体轮廓   R(d-up)          // 本图最上层那个行政区
+每级区块   R(ℓ-1) 的全部下级
+```
+
+- **往上只有目标那一条支线**：父级的同级会按整级画出来，但不再往下细分。
+- **往下是全分支**：目标的每个下级各自再展开。
+- **查询链高亮**：目标自身与图上画到的链路祖先，线更粗、不透明度拉满。
+- 线宽、字号都按图内相对层级统一推导。
+
+## 缓存
+
+库本身不碰 IO —— 所有缓存读写都走你注入的 `cache`。约定两类键：
+
+- `"index"`：全国行政区划索引（国家 → 省 → 地 → 县 整棵树，约 4065 个节点，带 `center`、不含边界），
+  首次运行一次请求拿到。
+- `<adcode>`：单个行政区自身的边界（`subdistrict=0`）。
+
+CLI 把键映射成 `<cache>/<adcode>.json` 与 `<cache>/index.json`。
+
+## 数据来源与已知限制
+
+数据来自高德 [行政区划查询 API](https://lbs.amap.com/api/webservice/guide/api/district)
+（`restapi.amap.com/v3/config/district`，`extensions=all`）。以下均为实测结论：
+
+- **子级 `polyline` 恒为空**：`subdistrict=1` 只给被查询那一级的边界，下级必须按 adcode 逐个再取 —— 请求量的主要来源。
+- **乡镇 / 街道级不可绘制**：接口不返回边界，且其 adcode 与所属区县相同，无法单独查询；目标会退到所属区县并给出提示。
+- **直辖市是三级**：真实树是 `北京市 → 北京城区(110100) → 各区`，所以北京的区目标 `d=3`。
+- **`--down` 最多 1**：再往下是几千个区块、几千次请求（接口有 QPS 限制），不现实。
+- **必须抽稀**：国家级边界原始 3.4 MB / 2302 个环；道格拉斯-普克抽稀（0.75px）与丢弃小于 2px² 的环是必需的，不是优化。
+- 覆盖范围与字段以高德接口为准。
+
+## 开发
+
+```bash
+bun install
+bun run build      # tsdown -> dist/（ESM .mjs + CJS .cjs + .d.ts）
+bun run test       # vitest
+bun run typecheck  # tsc --noEmit
+bun run gen --help # 等价 bun src/cli/gen_svg.ts --help
+```
+
+## License
+
+MIT © Kuriyona

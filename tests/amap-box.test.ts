@@ -1,0 +1,229 @@
+import { describe, expect, it } from "vitest";
+import { AmapBox } from "../src/index.js";
+import type { AmapCache, AmapDistrict } from "../src/types.js";
+
+// ---------------------------------------------------------------- fixture
+const NAMES: Record<string, { name: string; level: string }> = {
+  "100000": { name: "中华人民共和国", level: "country" },
+  "330000": { name: "浙江省", level: "province" },
+  "330100": { name: "杭州市", level: "city" },
+  "330110": { name: "临安区", level: "district" },
+  "330111": { name: "富阳区", level: "district" },
+  "330200": { name: "宁波市", level: "city" },
+  "330211": { name: "同名区", level: "district" },
+};
+
+const POLY: Record<string, string> = {
+  "100000": "73,18;135,18;135,54;73,54",
+  "330000": "119,29;122,29;122,32;119,32",
+  "330100": "119.5,29.5;121.5,29.5;121.5,31.5;119.5,31.5",
+  "330110": "119.6,29.6;120.4,29.6;120.4,30.4;119.6,30.4",
+  "330111": "120.6,29.6;121.4,29.6;121.4,30.4;120.6,30.4",
+  "330211": "120.6,29.6;121.4,29.6;121.4,30.4;120.6,30.4",
+};
+
+const node = (adcode: string, districts?: AmapDistrict[]): AmapDistrict => ({
+  ...NAMES[adcode],
+  adcode,
+  center: "120.5,30.5",
+  ...(districts ? { districts } : {}),
+});
+
+const INDEX_TREE = node("100000", [
+  node("330000", [node("330100", [node("330110", []), node("330111", [])])]),
+]);
+
+function makeEnv(tree: AmapDistrict = INDEX_TREE, hooks: { onIndex?: () => unknown } = {}) {
+  const store = new Map<string, string>();
+  const calls: string[] = [];
+  let indexHits = 0;
+  const fetchImpl = (raw: string) => {
+    calls.push(raw);
+    const url = new URL(raw);
+    const kw = url.searchParams.get("keywords")!;
+    const sub = url.searchParams.get("subdistrict");
+    if (sub === "3") {
+      indexHits++;
+      const forced = hooks.onIndex?.();
+      if (forced) return forced;
+      return { status: "1", districts: [tree] };
+    }
+    if (sub === "1") return { status: "1", districts: [] }; // 在线关键字搜索：查无此名
+    const poly = POLY[kw];
+    return poly
+      ? { status: "1", districts: [{ ...NAMES[kw], adcode: kw, center: "120.5,30.5", polyline: poly }] }
+      : { status: "0", info: "NO_DATA" };
+  };
+  const cache: AmapCache = {
+    read: (k) => store.get(k) ?? null,
+    write: (k, v) => void store.set(k, v),
+  };
+  const box = new AmapBox({ Key: "TEST", fetch: fetchImpl, cache });
+  return { box, store, calls, indexHits: () => indexHits };
+}
+
+const countPaths = (svg: string) => (svg.match(/<path /g) ?? []).length;
+
+// ---------------------------------------------------------------- tests
+describe("构造", () => {
+  it("缺 Key / fetch / cache 时报错", () => {
+    const cache: AmapCache = { read: () => null, write: () => {} };
+    expect(() => new AmapBox(null as never)).toThrow(TypeError);
+    expect(() => new AmapBox({ Key: "", fetch: () => ({}), cache })).toThrow(/Key/);
+    expect(() => new AmapBox({ Key: "k", fetch: null as never, cache })).toThrow(/fetch/);
+    expect(() => new AmapBox({ Key: "k", fetch: () => ({}), cache: {} as never })).toThrow(/cache/);
+  });
+});
+
+describe("resolve", () => {
+  it("精确同名 / 数字 adcode / 子串", async () => {
+    const { box } = makeEnv();
+    expect((await box.resolve("杭州市")).regions.map((r) => r.adcode)).toEqual(["330100"]);
+    expect((await box.resolve("330100")).regions.map((r) => r.name)).toEqual(["杭州市"]);
+    expect((await box.resolve("人民")).regions.map((r) => r.name)).toEqual(["中华人民共和国"]);
+  });
+
+  it("索引查不到时回落在线查询，仍无结果则返回空", async () => {
+    const { box, calls } = makeEnv();
+    expect((await box.resolve("查不到的地方")).regions).toEqual([]);
+    expect(calls.some((u) => u.includes("keywords=%E6%9F%A5%E4%B8%8D%E5%88%B0"))).toBe(true);
+  });
+
+  it("匹配过多时只取前 20 并记提示", async () => {
+    const many = node("100000", [
+      ...Array.from({ length: 25 }, (_, i) => ({
+        name: "测试镇",
+        adcode: `9900${i}`,
+        level: "city",
+        center: "120.5,30.5",
+      })),
+    ]);
+    const { box } = makeEnv(many);
+    const { regions, notes } = await box.resolve("测试镇");
+    expect(regions).toHaveLength(20);
+    expect(notes.join("\n")).toContain("只取前 20 个");
+  });
+});
+
+describe("generate", () => {
+  it("默认 up0/down1：只画目标的下级 + 目标轮廓", async () => {
+    const { box } = makeEnv();
+    const [r] = await box.generate("杭州市");
+    expect(r.file).toBe("杭州市-330100-u0d1.svg");
+    expect(r.blocks).toBe(2); // 临安区 + 富阳区
+    expect(r.outline).toBe(true); // 整体轮廓 = 杭州市自身
+    expect(r.svg).toContain(">杭州市</text>");
+    expect(countPaths(r.svg!)).toBe(3); // 2 区块 + 1 轮廓
+  });
+
+  it("up1：带出父级同级（浙江省）", async () => {
+    const { box } = makeEnv();
+    const [r] = await box.generate("杭州市", { up: 1, down: 1 });
+    expect(r.file).toBe("杭州市-330100-u1d1.svg");
+    expect(r.blocks).toBe(3); // 浙江省 + 临安区 + 富阳区
+    expect(r.outline).toBe(true); // 轮廓 = 浙江省
+  });
+
+  it("up 超出深度时被夹到深度并记提示", async () => {
+    const { box } = makeEnv();
+    const [r] = await box.generate("330110", { up: 9, down: 0 });
+    expect(r.up).toBe(3);
+    expect(r.file).toBe("临安区-330110-u3d0.svg");
+    expect(r.notes.join("\n")).toContain("超出范围");
+  });
+
+  it("县级目标 down1：下级是乡镇/街道，记提示并退化为只画自身", async () => {
+    const { box } = makeEnv();
+    const [r] = await box.generate("330110", { down: 1 });
+    expect(r.notes.join("\n")).toContain("乡镇/街道级");
+    expect(r.blocks).toBe(1); // 无下级可画 -> 只画自身
+    expect(r.outline).toBe(false);
+  });
+
+  it("down0 退化为只画自身轮廓", async () => {
+    const { box } = makeEnv();
+    const [r] = await box.generate("330110", { up: 0, down: 0 });
+    expect(r.file).toBe("临安区-330110-u0d0.svg");
+    expect(r.blocks).toBe(1);
+    expect(r.outline).toBe(false);
+    expect(countPaths(r.svg!)).toBe(1);
+  });
+
+  it("没有匹配时报错", async () => {
+    const { box } = makeEnv();
+    await expect(box.generate("不存在的地方")).rejects.toThrow(/没有匹配/);
+  });
+
+  it("多命中：本地提示逐张保留，解析层提示只在第一张", async () => {
+    const dup = (adcode: string): AmapDistrict => ({
+      name: "同名区",
+      adcode,
+      level: "district",
+      center: "120.5,30.5",
+      districts: [],
+    });
+    const tree = node("100000", [
+      node("330000", [node("330100", [dup("330110")]), node("330200", [dup("330211")])]),
+    ]);
+    const { box } = makeEnv(tree);
+    const res = await box.generate("同名区", { down: 1 });
+    expect(res).toHaveLength(2);
+    for (const r of res) expect(r.notes.join("\n")).toContain("乡镇/街道级");
+    expect(res[0].notes.join("\n")).toContain("首次运行");
+    expect(res[1].notes.join("\n")).not.toContain("首次运行");
+  });
+
+  it("非法跨度报错", async () => {
+    const { box } = makeEnv();
+    await expect(box.generate("杭州市", { down: 2 as never })).rejects.toThrow(/down/);
+    await expect(box.generate("杭州市", { up: -1 })).rejects.toThrow(/up/);
+    await expect(box.generate("杭州市", { up: 1.5 })).rejects.toThrow(/up/);
+  });
+});
+
+describe("缓存", () => {
+  it("二次调用命中缓存，不再打接口", async () => {
+    const { box, calls } = makeEnv();
+    await box.generate("杭州市");
+    const warm = calls.length;
+    await box.generate("杭州市");
+    expect(calls.length).toBe(warm);
+  });
+
+  it("refresh 绕开缓存重建索引", async () => {
+    const { box, calls, indexHits } = makeEnv();
+    await box.generate("杭州市");
+    expect(indexHits()).toBe(1);
+    await box.generate("杭州市", { refresh: true });
+    expect(indexHits()).toBe(2);
+    expect(calls.length).toBeGreaterThan(1);
+  });
+});
+
+describe("限流", () => {
+  it("可重试错误会退避重试", async () => {
+    let first = true;
+    const { box } = makeEnv(INDEX_TREE, {
+      onIndex: () => {
+        if (!first) return null;
+        first = false;
+        return { status: "0", info: "CUQPS_HAS_EXCEEDED_THE_LIMIT" };
+      },
+    });
+    const [r] = await box.generate("杭州市");
+    expect(r.svg).toBeTruthy();
+    expect(r.notes.join("\n")).toContain("限流重试");
+  });
+
+  it("不可重试错误立即返回，不空转", async () => {
+    let n = 0;
+    const { box } = makeEnv(INDEX_TREE, {
+      onIndex: () => {
+        n++;
+        return { status: "0", info: "INVALID_USER_KEY" };
+      },
+    });
+    await expect(box.ready()).rejects.toThrow(/索引/);
+    expect(n).toBe(1);
+  });
+});

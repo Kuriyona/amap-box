@@ -1,0 +1,16 @@
+node_modules/
+dist/
+
+# 可再生产物
+out/
+review/
+review.html
+
+# 边界 + 索引缓存
+districts/
+
+# 密钥
+.env
+
+*.log
+.DS_Store
