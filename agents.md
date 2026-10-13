@@ -59,6 +59,12 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
     数字（`0 < N <= 1`）= 目标包围盒长边占画幅可绘区长边的比例，目标质心居中、上下文超出画幅即裁掉，
     并默认开启 `outsideSameLevel`（仅在其可用条件满足时）。
   - 每项：`query` / `landed`（实际落到的行政区）、`up` / `down`（解析后）、`file`（建议文件名）、`svg`（文本，失败为 `null`）、`blocks`、`outline`、`neighbors`（画出的外部轮廓区块数）、`notes`。
+  - `meta`：图的元数据（`generator` 含版本、`source`、`attribution`、`query` / `landed`、`chain` 层级链、`span` 实际跨度与版式），
+    同一份对象会 `JSON.stringify` 后内嵌进 SVG 开头的 `<metadata>` 元素（XML 转义），让 SVG 自带出处；**不含时间戳**，
+    保证同一参数出图逐字节一致（review 页按哈希找等价组合依赖这点）。
+  - `perf`：`{ cacheHits, cacheMisses }` —— 这张图出图过程中命中/未命中缓存的键（`"index"` 与各 `<adcode>`，去重按首次访问顺序）。
+    只记真的读了注入缓存的调用；`refresh` 一律记未命中；索引已在本实例内存里复用时两张列表都不出现。
+    解析层（索引）那次统计并进第一张图，与 `notes` 的处理一致。
   - 找不到匹配 → `throw`；某一张画不出来 → 该项 `svg: null` + `notes` 说明，不中断其余。
   - 解析层提示（索引构建、匹配上限、限流重试）只挂在第一个结果上，避免多命中时重复。
 - `ready(refresh?)`：只预热全国索引。
@@ -265,6 +271,10 @@ bun src/cli/review.ts --out review --html review.html --cache districts --refres
 - **缓存**：`districts/index.json`（全国索引，首次运行一次请求拿到，见上）+ `districts/<adcode>.json`
   （该区块自身边界，`subdistrict=0`）。`-tree.json` 已废弃 —— 层级链改由索引回答。
   首次全新目标只需拉目标那几级的边界，`--refresh` 强制重取。
+  体量量级（实测约数）：索引 **0.5MB**、国家级边界 **3.4MB**（单个最大）、省级 0.3–1.0MB、地级 0.05–0.3MB、
+  县级 0.01–0.15MB（中位 ~0.07MB）。整轮累计：`杭州 u0d0` ≈0.6MB、`杭州 u0d1` ≈1MB、`浙江 u0d1` ≈2.5MB、
+  `中国 u0d1`（国家+34省）≈**20MB**；跑完基准四目标 + 审阅页后 `districts/` 实测约 **41MB**（260 个文件，
+  另有废弃的 `-tree.json` ~4MB，可随时删）。
 
 ## 代码结构
 

@@ -67,6 +67,8 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
 | `up` / `down` | 解析后的跨度（`up` 超过目标深度时会被夹到深度） |
 | `file` | 建议文件名 `[名称]-[adcode]-u<K>d<M>.svg` |
 | `svg` | SVG 文本；这张画不出来时为 `null` |
+| `meta` | 图的元数据（生成器+版本、数据来源、署名、`query` / `landed`、`chain` 层级链、实际 `span`）；同一份 JSON 内嵌在 SVG 开头的 `<metadata>` 里 |
+| `perf` | `{ cacheHits, cacheMisses }`：这张图出图过程中命中 / 未命中缓存的键（`"index"` 与各 `<adcode>`） |
 | `blocks` / `outline` | 区块数 / 是否带整体轮廓 |
 | `neighbors` | 画出的外部轮廓区块数（`outside` 启用且视图内有同级相邻区域时 > 0） |
 | `notes` | 提示与警告（索引构建、匹配上限、限流重试、无边界数据…） |
@@ -105,8 +107,8 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
 ### 纯函数导出
 
 `svgFileName`、`parseRatio` / `parseCenter` / `centerRatioViewBox`、`parsePolyline` / `toUnit` / `signedArea` / `centroid` / `pointInRing` / `simplify`、
-`renderMap` / `wrapSvg`，以及 `AmapBoxOptions` / `AmapCache` / `AmapFetch` / `SpanOptions` / `LayoutOptions` /
-`ColorOptions` / `MapRatio` / `CenterMode` / `GenerateResult` 等类型。
+`renderMap` / `wrapSvg`（`wrapSvg(output, meta?)` 第二个参数可选，给了就把 `meta` 的 JSON 内嵌成 `<metadata>`），以及 `AmapBoxOptions` / `AmapCache` / `AmapFetch` / `SpanOptions` / `LayoutOptions` /
+`ColorOptions` / `MapMeta` / `MapSpan` / `PerfStats` / `RegionRef` / `MapRatio` / `CenterMode` / `GenerateResult` 等类型。
 
 ## CLI
 
@@ -202,6 +204,20 @@ amap-box-review 杭州市 上海市 朝阳区    # 指定目标（同名多结�
 - `<adcode>`：单个行政区自身的边界（`subdistrict=0`）。
 
 CLI 把键映射成 `<cache>/<adcode>.json` 与 `<cache>/index.json`。
+
+各文件体量（JSON，实测**约**数，只作量级参考）：
+
+| 键 | 约 | 说明 |
+|---|---|---|
+| `index` | **0.5 MB** | 全国索引，一次请求，始终存在 |
+| `100000` | **3.4 MB** | 国家级边界，单个最大（原始 2302 个环） |
+| 省级 `<xx0000>` | 0.3 – 1.0 MB | 如 北京市 0.32 MB、浙江省 0.71 MB、内蒙古 1.0 MB |
+| 地级 `<xxyy00>` | 0.05 – 0.3 MB | 如 杭州市 0.13 MB |
+| 县级 | 0.01 – 0.15 MB | 中位数约 0.07 MB |
+
+整轮出图的累计量级：`杭州市 u0d0` ≈ 0.6 MB（索引 + 1 个地级）；`杭州市 u0d1` ≈ 1 MB；
+`浙江省 u0d1` ≈ 2.5 MB；`中国 u0d1`（国家 + 34 省）≈ **20 MB**。跑完基准四目标 + 审阅页后
+`districts/` 目录实测约 **41 MB**（260 个文件，另有已废弃的 `-tree.json` 约 4 MB，可随时删）。
 
 ## 数据来源与已知限制
 
