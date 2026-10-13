@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CAPTION_H, DIM_OPACITY, DIM_STROKE, HOT_TARGET, MAP_LONG, PAD, renderMap, TARGET_FILL, wrapSvg, type RenderUnit } from "../src/render.js";
+import { CAPTION_H, CONTEXT_OPACITY_MAX, FOCUS_OPACITY, FOCUS_STROKE, HOT_TARGET, MAP_LONG, OUTLINE_STROKE, PAD, renderMap, TARGET_FILL, wrapSvg, type RenderUnit } from "../src/render.js";
 
 const square = (x: number, s: number) => [
   [120 + x, 30],
@@ -133,16 +133,30 @@ describe("renderMap", () => {
     expect((map.markup.match(new RegExp(TARGET_FILL, "g")) ?? []).length).toBe(1);
   });
 
-  it("上级轮廓高亮：默认把整体轮廓与目标以外的区块压成细灰线，仅目标亮白", () => {
+  it("聚焦（默认 highlightContext:false）：非目标节点一律细灰线，仅目标亮白", () => {
     const units = [unit("杭州市", "330100", 0), unit("宁波市", "330200", 1)];
     const outline = { name: "浙江省", adcode: "330000", center: [120.5, 30.5], rings: [square(-1, 4)] };
-    const dim = renderMap({ units, outline, caption: "T", target: "330100", targetBackground: false })!;
-    const hot = renderMap({ units, outline, caption: "T", target: "330100", targetBackground: false, highlightContext: true })!;
-    const dimmed = (m: string) => (m.match(new RegExp(`stroke-opacity="${DIM_OPACITY.toFixed(2)}"`, "g")) ?? []).length;
-    expect(dimmed(dim.markup)).toBe(2); // 宁波市 + 浙江省轮廓
-    expect(dimmed(hot.markup)).toBe(0);
-    expect(dim.markup).toContain(`stroke-width="${DIM_STROKE.toFixed(2)}"`); // 轮廓变细
-    expect(dim.markup).toContain(`stroke-width="${HOT_TARGET.toFixed(2)}"`); // 目标仍亮白
+    const svg = renderMap({ units, outline, caption: "T", target: "330100", targetBackground: false })!.markup;
+    const flat = `stroke-width="${FOCUS_STROKE.toFixed(2)}" stroke-opacity="${FOCUS_OPACITY.toFixed(2)}"`;
+    expect(svg.split(flat).length - 1).toBe(2); // 宁波市 + 浙江省轮廓
+    expect(svg).toContain(`stroke-width="${HOT_TARGET.toFixed(2)}"`); // 目标单独亮白
+  });
+
+  it("highlightContext:true：非目标节点按层级分档（轮廓最粗、越深越粗越亮），目标仍单独高亮", () => {
+    const units = [unit("杭州市", "330100", 0), unit("宁波市", "330200", 1)];
+    const outline = { name: "浙江省", adcode: "330000", center: [120.5, 30.5], rings: [square(-1, 4)] };
+    const svg = renderMap({ units, outline, caption: "T", target: "330100", targetBackground: false, highlightContext: true })!.markup;
+    expect(svg).not.toContain(`stroke-opacity="${FOCUS_OPACITY.toFixed(2)}"`); // 不再压成统一灰线
+    expect(svg).toContain(`stroke-width="${OUTLINE_STROKE.toFixed(2)}"`); // 轮廓最粗
+    expect(svg).toContain(`stroke-opacity="${CONTEXT_OPACITY_MAX.toFixed(2)}"`); // 轮廓最亮
+    expect(svg).toContain(`stroke-width="${HOT_TARGET.toFixed(2)}"`); // 目标仍单独高亮
+  });
+
+  it("highlightContext:true：图内层级越浅线越粗（上层区块 > 下层区块）", () => {
+    const units = [unit("省", "1", 0, 0), unit("市", "2", 0, 1)];
+    const map = renderMap({ units, outline: null, caption: "T", highlightContext: true })!;
+    const w = [...map.markup.matchAll(/stroke-width="([\d.]+)"/g)].map((m) => +m[1]!);
+    expect(w[0]).toBeGreaterThan(w[1]!);
   });
 
   it("标签开关：可分开关闭目标节点与上下文标签", () => {

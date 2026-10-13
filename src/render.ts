@@ -6,13 +6,19 @@ import type { MapRatio } from "./types.js";
 
 export const BG = "#0d1117";
 export const LINE = "#ffffff";
-export const MIN_STROKE = 0.8; // 单层出图：最细/最粗线条
-export const MAX_STROKE = 2.8; // 单层里最大的那个区块；要比 HOT_TARGET 低一档
-export const OUTLINE_STROKE = 3.6; // 整体轮廓（与下级同图）
+export const MIN_STROKE = 0.8; // 区块线宽下限（单层按面积 / 多层最深一级）
+export const MAX_STROKE = 2.2; // 区块线宽上限（保证整体轮廓 OUTLINE_STROKE 始终更粗）
+export const OUTLINE_STROKE = 2.8; // 整体轮廓（与区块同图）：始终高于任何区块线宽
+export const OUTLINE_STROKE_SOLO = 3.6; // 整体轮廓单独成图（没有区块，`up=0` 等）：只当边框
 export const OUTSIDE_STROKE = 1; // 拓展外部轮廓：视图内的同级相邻区域（不参与缩放、不加标签）
 export const OUTSIDE_OPACITY = 0.3;
-export const DIM_STROKE = 1; // 未高亮的上下文（整体轮廓 + 目标以外的区块）线宽
-export const DIM_OPACITY = 0.3; // 未高亮的上下文不透明度（在白底/深底上都呈细灰线）
+export const CONTEXT_OPACITY = 0.45; // 分层上下文（非目标节点）基础不透明度
+export const CONTEXT_DEPTH_OPACITY = 0.1; // 分层上下文每浅一级增加的亮度
+export const CONTEXT_OPACITY_MAX = 0.75; // 分层上下文不透明度上限（整体轮廓，仍低于目标）
+export const FOCUS_STROKE = 1; // highlightContext:false 时非目标节点的统一线宽
+export const FOCUS_OPACITY = 0.3; // highlightContext:false 时非目标节点的统一不透明度（细灰线）
+export const CTX_BAND_STEP = 0.2; // 多层级时：每浅一级的线宽基准增量（层级关系的主要来源）
+export const CTX_AREA_BAND = 0.75; // 多层级时：同级内面积微调占一个层距的比例（< 1 才不破坏层级）
 export const TARGET_FILL = "#1f6feb"; // 目标节点所在区域的背景高亮色
 export const TARGET_FILL_OPACITY = 0.22; // 背景高亮不透明度
 export const HOT_TARGET = 3.6; // 查询目标自身（区块形态时）
@@ -117,8 +123,9 @@ export interface RenderInput {
   /** 目标节点自身的文字标签是否绘制。默认 `true`。 */
   targetLabels?: boolean;
   /**
-   * 是否高亮上级轮廓：整体轮廓 + 目标节点以外的全部区块线。
-   * `false`（默认）时它们只画细灰线（`DIM_STROKE` / `DIM_OPACITY`），仅目标节点保持亮白。
+   * 是否高亮上级轮廓。默认 `false`：非目标节点一律画成统一细灰线（`FOCUS_STROKE` / `FOCUS_OPACITY`），只突出目标。
+   * `true`：非目标节点按**图内相对层级**分档——整体轮廓最粗、最亮，其余越浅的层级越粗、越亮，
+   * 目标仍单独高亮（`HOT_TARGET`）；层级关系始终保留。
    */
   highlightContext?: boolean;
   /** 是否给目标节点所在区域填充半透明高亮背景。默认 `true`。 */
@@ -144,9 +151,10 @@ export interface RenderOutput {
 
 /**
  * 把 units（各下级，可带 depth）与 outline（整体轮廓）画成一张图。
- * depth 不唯一时按层级区分线条：越深越粗越亮。
+ * depth 不唯一时按层级区分线条：越浅的层级越粗、越亮。
  * 查询链（target + chain 上的祖先，且确实画成了区块）单独高亮：最粗、不透明度拉满。
- * 未高亮上下文时（`highlightContext: false`，默认）：整体轮廓与目标以外的区块只画细灰线，仅目标保持亮白。
+ * 未高亮上下文时（`highlightContext: false`，默认）：非目标节点一律画统一细灰线，仅目标保持亮白。
+ * 高亮上下文时（`highlightContext: true`）：非目标节点按图内相对层级分档，整体轮廓最粗，其余越浅越粗、越亮。
  * 目标节点所在区域可选（`targetBackground`，默认开）填充半透明背景高亮。
  * 标签字号同级统一，由该级中「水平/垂直距离最短的一对」决定。
  * 没有任何可绘制内容时返回 null。
@@ -302,33 +310,29 @@ export function renderMap({
   if (!geo.length) return null;
   const outlineIsTarget = outline != null && outline.adcode === target;
   const hasTarget = geo.some((g) => g.isTarget) || outlineIsTarget;
-  // 未高亮上下文时：整体轮廓 + 目标节点以外的区块都画成细灰线，仅目标保持亮白
-  const dimContext = !highlightContext && hasTarget;
   const multi = geo.length > 1; // 只有一个区块时无所谓「突出」
   for (const g of geo) if (!multi) g.hot = 0;
+  // 每个区块在当前图内的相对层级（0 = 最上层）
+  const depthOf = (g: (typeof geo)[number]) => g.depth - Math.min(...geo.map((x) => x.depth));
+  const maxDepth = Math.max(...geo.map((g) => g.depth));
 
-  // 只有把多个层级叠在一张图上时才需要按层级区分
-  const layered = new Set(geo.map((g) => g.depth)).size > 1;
+  // 上下文是否按层级分层：默认（highlightContext:false）统一细灰线，仅目标突出；
+  // 开启后非目标节点按图内相对层级分档（越浅越粗、越亮），整体轮廓始终最粗，目标仍单独高亮。
+  const hierarchy = highlightContext || !hasTarget;
+  // 单层级按面积铺满 MIN~MAX；多层叠图按相对层级分档，同级内只用占一个层距以内的面积微调。
   const maxArea = Math.max(...geo.map((g) => g.area));
   const rel = (area: number) => Math.sqrt(area / maxArea);
+  const step = maxDepth > 0 ? Math.min(CTX_BAND_STEP, (MAX_STROKE - MIN_STROKE) / maxDepth) : 0;
+  const ctxWidth = (g: (typeof geo)[number]) =>
+    maxDepth > 0
+      ? MAX_STROKE - step * depthOf(g) + step * CTX_AREA_BAND * rel(g.area)
+      : MIN_STROKE + (MAX_STROKE - MIN_STROKE) * rel(g.area);
+  const ctxOpacity = (g: (typeof geo)[number]) =>
+    Math.min(CONTEXT_OPACITY_MAX, CONTEXT_OPACITY + CONTEXT_DEPTH_OPACITY * (maxDepth - depthOf(g)));
   const strokeOf = (g: (typeof geo)[number]) =>
-    dimContext && !g.isTarget
-      ? DIM_STROKE
-      : g.hot === 1
-        ? HOT_TARGET
-        : g.hot === 2
-          ? HOT_ANCESTOR
-          : layered
-            ? DEPTH_BASE + DEPTH_STEP * g.depth + 0.45 * rel(g.area)
-            : MIN_STROKE + (MAX_STROKE - MIN_STROKE) * rel(g.area);
+    g.hot === 1 ? HOT_TARGET : hierarchy ? (g.hot === 2 ? HOT_ANCESTOR : ctxWidth(g)) : FOCUS_STROKE;
   const opacityOf = (g: (typeof geo)[number]) =>
-    dimContext && !g.isTarget
-      ? DIM_OPACITY
-      : g.hot
-        ? 1
-        : layered
-          ? Math.min(1, 0.45 + 0.18 * g.depth)
-          : 0.88;
+    g.hot === 1 ? 1 : hierarchy ? (g.hot === 2 ? 1 : ctxOpacity(g)) : FOCUS_OPACITY;
 
   // 同级统一字号：由该级中「水平/垂直距离最短的那一对」决定 —— 超过它这一对就撞上。
   // 每级取所有两两组合允许字号的**最小值**。
@@ -419,16 +423,16 @@ export function renderMap({
   if (outline) {
     const p = project(outline);
     if (p) {
-      // up=0 时轮廓就是目标自身，但轮廓始终只当边框（多层级时更细）
-      const dim = dimContext && !outlineIsTarget;
+      // 轮廓是区块的外框：分层时始终最粗（> 任何区块）；未分层时与上下文同样画成细灰线。
+      const width = outlineIsTarget ? OUTLINE_STROKE_SOLO : hierarchy ? OUTLINE_STROKE : FOCUS_STROKE;
+      const opacity = outlineIsTarget ? 1 : hierarchy ? CONTEXT_OPACITY_MAX : FOCUS_OPACITY;
       const fill =
         targetBackground && outlineIsTarget
           ? ` fill="${TARGET_FILL}" fill-opacity="${TARGET_FILL_OPACITY.toFixed(2)}"`
           : ` fill="none"`;
       out.push(
         `<path d="${dOf(p.rings)}"${fill} stroke="${LINE}" ` +
-          `stroke-width="${(dim ? DIM_STROKE : layered ? 2.6 : OUTLINE_STROKE).toFixed(2)}" ` +
-          `stroke-opacity="${(dim ? DIM_OPACITY : 1).toFixed(2)}" stroke-linejoin="round"/>`,
+          `stroke-width="${width.toFixed(2)}" stroke-opacity="${opacity.toFixed(2)}" stroke-linejoin="round"/>`,
       );
     }
   }

@@ -25,7 +25,7 @@ const USAGE = `用法: amap-box <行政区名|adcode> [选项]
   --no-title     不画标题            (默认画)
   --no-context-labels  不画非目标节点（上下文）的标签  (默认画)
   --no-target-label    不画目标节点自身的标签          (默认画)
-  --highlight-context  高亮上级轮廓：整体轮廓 + 目标以外的线都亮白 (默认灰)
+  --highlight-context  上下文按层级分层：整体轮廓最粗最亮、越浅越粗，仍只高亮目标 (默认统一细灰线)
   --no-target-bg       不给目标节点所在区域填充背景高亮 (默认填)
   --center [outline|target|N]  让目标居中 (默认不居中，内容居中)：
                         outline = 目标居中且整体轮廓完整；target = 目标占画幅长边 0.5；
