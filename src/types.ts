@@ -128,7 +128,7 @@ export interface MapSpan {
  * （JSON 文本），让 SVG 文件自带出处与画的是什么。**不含时间戳**，保证同一参数出图逐字节一致。
  */
 export interface MapMeta {
-  /** 生成器与版本，如 `@kuriyona/amap-box@0.1.0`。 */
+  /** 生成器与版本，如 `@kuriyona/amap-box@0.2.0`。 */
   generator: string;
   /** 数据来源接口。 */
   source: string;
