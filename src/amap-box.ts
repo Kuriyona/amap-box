@@ -398,7 +398,6 @@ export class AmapBox {
       title: layout.title,
       contextLabels: layout.contextLabels,
       targetLabels: layout.targetLabels,
-      highlightContext: layout.highlightContext,
       targetBackground: layout.targetBackground,
       center: layout.center,
       chain: chain.map((n) => n.region.adcode),

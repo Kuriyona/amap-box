@@ -54,11 +54,6 @@ export interface LayoutOptions {
   contextLabels?: boolean;
   /** 目标节点自身的文字标签是否绘制。默认 `true`。 */
   targetLabels?: boolean;
-  /**
-   * 是否高亮上级轮廓：整体轮廓 + 目标节点以外的全部区块线。
-   * `false`（默认）时它们只画细灰线，仅目标节点保持亮白。
-   */
-  highlightContext?: boolean;
   /** 是否给目标节点所在区域填充半透明高亮背景。默认 `true`。 */
   targetBackground?: boolean;
   /**

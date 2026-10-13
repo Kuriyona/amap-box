@@ -53,8 +53,6 @@ export {
   BG,
   LINE,
   OUTLINE_STROKE,
-  FOCUS_STROKE,
-  FOCUS_OPACITY,
   TARGET_FILL,
   TARGET_FILL_OPACITY,
   type CenterMode,

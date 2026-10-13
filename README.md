@@ -56,7 +56,7 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
 | 方法 | 说明 |
 |---|---|
 | `resolve(keyword, refresh?)` | 名称 / adcode → `{ regions, notes }`。先查索引，索引里没有的（乡镇 / 街道级）回落在线查询 |
-| `generate(keyword, { up?, down?, outside?, outsideSameLevel?, ratio?, padding?, title?, contextLabels?, targetLabels?, highlightContext?, targetBackground?, center?, refresh? })` | 每个命中出一张图，返回 `GenerateResult[]`（不落盘，`svg` 给你自己写） |
+| `generate(keyword, { up?, down?, outside?, outsideSameLevel?, ratio?, padding?, title?, contextLabels?, targetLabels?, targetBackground?, center?, refresh? })` | 每个命中出一张图，返回 `GenerateResult[]`（不落盘，`svg` 给你自己写） |
 | `ready(refresh?)` | 只预热全国索引 |
 
 `GenerateResult` 字段：
@@ -86,9 +86,8 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
 - `title`：是否绘制标题（含副标题），默认 `true`。
 - `contextLabels`：是否绘制**非目标节点**（上下文）的标签，默认 `true`。
 - `targetLabels`：是否绘制**目标节点自身**的标签，默认 `true`。
-- `highlightContext`：上下文的画法，默认 `false`。默认把整体轮廓与目标节点以外的区块**统一**画成细灰线
-  （`FOCUS_STROKE = 1` / `opacity 0.3`），只突出目标；设 `true` 则非目标节点按**图内相对层级**分档
-  （整体轮廓最粗最亮，越浅的层级越粗越亮），目标仍单独高亮 —— 层级关系清晰，且不会把所有上下文白洗。
+- 层级分层（**始终生效，没有开关**）：目标以外的节点按**图内相对层级**绘制 —— 整体轮廓最粗最亮（`OUTLINE_STROKE = 2.8`），
+  区块越浅的层级越粗越亮；目标（与图上画到的链路祖先）单独高亮。`MIN_STROKE`~`MAX_STROKE` 给出区块线宽范围。
 - `targetBackground`：是否给**目标节点所在区域**填充半透明背景高亮，默认 `true`（目标落到整体轮廓上时填充轮廓区域）。
 - `center`：是否让**目标**（而非内容包围盒）居中，默认 `false`（内容居中）。
   - `true` / `"outline"`（方案一）：目标质心居中，并保证最外层轮廓 `R(d-up)` 完整可见（多余空间补成留白）。
@@ -125,7 +124,6 @@ amap-box <行政区名|adcode> [选项]
 | `--no-title` | 不画标题 | — |
 | `--no-context-labels` | 不画非目标节点（上下文）的标签 | — |
 | `--no-target-label` | 不画目标节点自身的标签 | — |
-| `--highlight-context` | 上下文按层级分层：整体轮廓最粗最亮、越浅越粗越亮，仅目标单独高亮（默认所有上下文统一细灰线） | — |
 | `--no-target-bg` | 不给目标节点所在区域填充背景高亮 | — |
 | `--center [outline\|target\|N]` | 让目标居中：`outline` = 目标居中且整体轮廓完整；`target` = 目标占画幅长边 `0.5`；`N`（`0<N<=1`）= 目标占画幅长边比例（`target`/`N` 隐含 `--outside-same-level`） | — |
 | `--out <dir>` | 输出目录 | `out` |
@@ -176,9 +174,9 @@ amap-box-review 杭州市 上海市 朝阳区    # 指定目标（同名多结�
 - **往上只有目标那一条支线**：父级的同级会按整级画出来，但不再往下细分。
 - **往下是全分支**：目标的每个下级各自再展开。
 - **查询链高亮**：目标自身与图上画到的链路祖先，线更粗、不透明度拉满。
-- **目标聚焦 / 上下文分层**：默认（`highlightContext: false`）把整体轮廓与目标节点以外的区块**统一**画成细灰线，
-  只留目标节点亮白；`highlightContext: true` 时它们按**图内相对层级**分档（整体轮廓最粗最亮、越浅的层级越粗越亮），
-  仍只有目标单独高亮。目标节点所在区域默认填充半透明背景高亮（`targetBackground`）。
+- **上下文分层**（始终生效，没有开关）：目标以外的节点按**图内相对层级**绘制 —— 整体轮廓最粗最亮、
+  越浅的层级越粗越亮，仍只有目标（与图上画到的链路祖先）单独高亮。目标节点所在区域默认填充半透明背景高亮
+  （`targetBackground`）。
 - **标签**：非目标节点（`contextLabels`）与目标节点自身（`targetLabels`）的标签可分别开关，默认都画。
 - **外部轮廓**（`outside`）：把最外层级 `R(d-up)` 同级、落在视图内的相邻区域也描一遍（更细更淡、无标签）；
   `R(d-up)` 已是国家级时没有同级。

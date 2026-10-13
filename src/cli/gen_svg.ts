@@ -25,7 +25,6 @@ const USAGE = `用法: amap-box <行政区名|adcode> [选项]
   --no-title     不画标题            (默认画)
   --no-context-labels  不画非目标节点（上下文）的标签  (默认画)
   --no-target-label    不画目标节点自身的标签          (默认画)
-  --highlight-context  上下文按层级分层：整体轮廓最粗最亮、越浅越粗，仍只高亮目标 (默认统一细灰线)
   --no-target-bg       不给目标节点所在区域填充背景高亮 (默认填)
   --center [outline|target|N]  让目标居中 (默认不居中，内容居中)：
                         outline = 目标居中且整体轮廓完整；target = 目标占画幅长边 0.5；
@@ -47,7 +46,6 @@ async function main() {
     noTitle: boolean;
     noContextLabels: boolean;
     noTargetLabel: boolean;
-    highlightContext: boolean;
     noTargetBg: boolean;
     ratio?: string;
     padding?: string;
@@ -64,7 +62,6 @@ async function main() {
     noTitle: false,
     noContextLabels: false,
     noTargetLabel: false,
-    highlightContext: false,
     noTargetBg: false,
   };
   let keyword: string | null = null;
@@ -81,7 +78,6 @@ async function main() {
     else if (a === "--no-title") flags.noTitle = true;
     else if (a === "--no-context-labels") flags.noContextLabels = true;
     else if (a === "--no-target-label") flags.noTargetLabel = true;
-    else if (a === "--highlight-context") flags.highlightContext = true;
     else if (a === "--no-target-bg") flags.noTargetBg = true;
     else if (a === "--ratio") flags.ratio = argv[++i];
     else if (a === "--padding") flags.padding = argv[++i];
@@ -186,7 +182,6 @@ async function main() {
       title: !flags.noTitle,
       contextLabels: !flags.noContextLabels,
       targetLabels: !flags.noTargetLabel,
-      highlightContext: flags.highlightContext,
       targetBackground: !flags.noTargetBg,
       center,
       refresh: flags.refresh,
@@ -213,7 +208,6 @@ async function main() {
     if (flags.noTitle) bits.push("无标题");
     if (flags.noContextLabels) bits.push("无上下文标签");
     if (flags.noTargetLabel) bits.push("无目标标签");
-    if (flags.highlightContext) bits.push("高亮上级轮廓");
     if (flags.noTargetBg) bits.push("无目标背景");
     if (flags.center !== undefined) bits.push(`目标居中 ${flags.center}`);
     if (flags.outsideSameLevel) bits.push("含目标同级轮廓");

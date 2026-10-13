@@ -40,7 +40,7 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
 
 - **构造参数**（对象形式，只有这三个）：`Key`（string）、`fetch`（`(url) => object`）、`cache`（`{ read(key), write(key, value) }`，read/write 允许同步或返回 Promise）。
 - `resolve(keyword, refresh?)` → `{ regions, notes }`：名称/adcode → 命中的行政区（索引优先，未命中回落在线查询）。
-- `generate(keyword, { up?, down?, outside?, outsideSameLevel?, ratio?, padding?, title?, contextLabels?, targetLabels?, highlightContext?, targetBackground?, center?, refresh? })` → `GenerateResult[]`：每个命中一张图。
+- `generate(keyword, { up?, down?, outside?, outsideSameLevel?, ratio?, padding?, title?, contextLabels?, targetLabels?, targetBackground?, center?, refresh? })` → `GenerateResult[]`：每个命中一张图。
   - `up` 默认 `0`（`"max"` = 到国家级，超过目标深度会被夹到深度）；`down` 只允许 `0 | 1`，默认 `0`。
   - `outside` 默认 `false`：拓展外部轮廓，把「最外层级」（`R(d-up)`，如 杭州 u1 / 浙江 u0 都是浙江省）同级、
     落在当前视图内的其他行政区轮廓也画出来（更细更淡、不加标签、不往下细分、不改变缩放）。
@@ -48,8 +48,8 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
     为控成本，先筛出视图内的「上一层」（第 `d-1` 级）元素，再取其第 `d` 级下级。**仅当 `up <= 1` 或目标为省级以上时可用**，否则 `generate` 抛出。
   - 版式：`ratio` 默认 `"auto"`（画幅宽高比，可给正数或 `"16:9"`；给定时内容按长边 1000px 缩放后居中，
     多余空间作为留白补到画布）、`padding` 默认 `24`（内容四周留白 px）、`title` 默认 `true`（是否画标题）。
-  - 聚焦：`highlightContext` 默认 `false` —— 整体轮廓 + 目标以外的区块统一画细灰线（`FOCUS_STROKE = 1` / `opacity 0.3`），仅目标亮白。
-    设 `true` 则非目标节点按图内相对层级分档：整体轮廓最粗最亮（`2.8`）、越浅的层级越粗越亮，仍只目标单独高亮（不白洗全部上下文）。
+  - 分层：目标以外的节点按**图内相对层级**绘制 —— 整体轮廓最粗最亮（`OUTLINE_STROKE = 2.8`），
+    区块越浅的层级越粗越亮（每层距 `CTX_BAND_STEP = 0.2`，同级内面积微调 ≤ `0.75×层距`），目标单独高亮（`HOT_TARGET`）。始终生效，无开关。
     `targetBackground` 默认 `true` —— 给目标节点所在区域填充半透明背景高亮（目标落到整体轮廓上时填充轮廓区域）。
   - 标签：`contextLabels` 默认 `true`（非目标节点/上下文的标签）、`targetLabels` 默认 `true`（目标节点自身的标签），可分别关闭。
   - 目标居中：`center` 默认 `false`（内容包围盒居中）。`true` / `"outline"` = 目标质心居中，并保证最外层轮廓
@@ -65,7 +65,7 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
 ## CLI 运行
 
 ```bash
-bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outside] [--ratio auto|W:H|N] [--padding N] [--no-title] [--no-context-labels] [--no-target-label] [--highlight-context] [--no-target-bg] [--center outline|target|N] [--out <dir>] [--cache <dir>] [--refresh]
+bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outside] [--ratio auto|W:H|N] [--padding N] [--no-title] [--no-context-labels] [--no-target-label] [--no-target-bg] [--center outline|target|N] [--out <dir>] [--cache <dir>] [--refresh]
 # 或装好之后：amap-box <行政区名|adcode> [选项]
 ```
 
@@ -84,7 +84,6 @@ bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outsid
 | `--no-title` | 不画标题 | — |
 | `--no-context-labels` | 不画非目标节点（上下文）的标签 | — |
 | `--no-target-label` | 不画目标节点自身的标签 | — |
-| `--highlight-context` | 上下文按层级分层：整体轮廓最粗最亮、越浅越粗越亮，仅目标单独高亮（默认所有上下文统一细灰线） | — |
 | `--no-target-bg` | 不给目标节点所在区域填充背景高亮 | — |
 | `--center [outline\|target\|N]` | 让目标居中：`outline` = 目标居中且整体轮廓完整；`target` = 目标占画幅长边 `0.5`；`N`（`0<N<=1`）= 目标占画幅长边比例（`target`/`N` 隐含 `--outside-same-level`） | — |
 | `--out` / `--cache` | 输出目录 / 边界+索引缓存目录 | `out` / `districts` |
@@ -120,19 +119,17 @@ CLI 的磁盘缓存把键映射成 `<cache>/<key>.json`（键 `index` 与 `<adco
 - **往上只有目标那一条支线**：父级的同级会按整级画出来，但不再往下细分
 - **往下是全分支**：目标的每个下级各自再展开
 - **查询链高亮**：目标自身 + 图上画到的链路祖先，线更粗、不透明度拉满 —— 一眼看出"当前指的是哪个"。
-  目标 `HOT_TARGET = 3.6`、祖先 `HOT_ANCESTOR = 2.4`；只有一个区块时不做区分（没有兄弟可比）。
-  祖先仅在 `highlightContext: true` 时高亮；默认（聚焦）下它们与其它上下文一样是细灰线
-- **聚焦 / 上下文分层**（`highlightContext`，默认 `false`）：默认下非目标节点（整体轮廓 + 目标以外的区块）
-  一律画成统一细灰线（`FOCUS_STROKE = 1` / `FOCUS_OPACITY = 0.3`），只突出目标；设 `true` 则改为按**图内相对层级**
-  分档 —— 整体轮廓最粗（`OUTLINE_STROKE = 2.8`）且最亮，区块越浅的层级越粗越亮，目标仍单独高亮（不把上下文全部白洗）。
+  目标 `HOT_TARGET = 3.6`、祖先 `HOT_ANCESTOR = 2.4`
+- **上下文分层**（始终生效，无开关）：目标以外的节点按**图内相对层级**绘制 —— 整体轮廓最粗（`OUTLINE_STROKE = 2.8`）
+  且最亮，区块越浅的层级越粗越亮，目标仍单独高亮（不把上下文全部白洗）。
   「目标节点」= 查询命中的那个行政区，它要么是某个区块（`up` 足够小时），要么就是整体轮廓本身（如 `u0d1`）
 - **目标背景高亮**（`targetBackground`，默认 `true`）：给目标节点所在区域填 `TARGET_FILL = #1f6feb`、
   `opacity 0.22`；目标落到整体轮廓上时填轮廓区域。只是同一 `<path>` 的 `fill` 属性，**不额外增加 path**（区块计数不变）
 - **标签开关**：`contextLabels`（非目标节点/上下文）、`targetLabels`（目标节点自身），默认都开
-- 线宽/亮度按**图内相对层级**（最上层 = 0），`highlightContext: true` 时生效：单层级区块按面积铺满 `0.8~2.2`；
+- 线宽按**图内相对层级**（最上层 = 0）：单层级区块按面积铺满 `0.8~2.2`（`MIN_STROKE`~`MAX_STROKE`）；
   多层叠图按相对层级分档（越浅越粗，每层距 `CTX_BAND_STEP = 0.2`，同级内面积微调不超过 `0.75×层距`），
   整体轮廓 `2.8`（始终高于任何区块；目标落到轮廓上时按边框 `3.6`）。
-  不透明度：区块 `0.45` 起、每浅一级 `+0.1`，整体轮廓 `0.75` —— 均低于目标的 `1.0`
+  不透明度：区块 `0.45` 起、每浅一级 `+0.1`，整体轮廓 `0.75` —— 均低于目标/祖先的 `1.0`
 - 字号**同级统一**，由该级"水平/垂直距离最短的那一对"决定
 - **外部轮廓**（`--outside` / `outside: true`）：把「最外层级」`R(d-up)` 同级的其他行政区中，**投影后与画布相交**
   （即落在当前视图内）的那些轮廓也画出来，线细（`1.0`）、淡（`opacity 0.3`）、不加标签，也不参与缩放与层级推导；
