@@ -6,7 +6,7 @@
  */
 import type { AmapDistrict, AmapBoxOptions, GenerateResult, ResolveResult, SpanOptions } from "./types.js";
 import { toUnit, type Unit } from "./geometry.js";
-import { parseRatio, renderMap, wrapSvg, type RenderUnit } from "./render.js";
+import { centerRatioViewBox, parseCenter, parseRatio, renderMap, wrapSvg, type RenderUnit } from "./render.js";
 
 const API = "https://restapi.amap.com/v3/config/district";
 const COUNTRY = "100000";
@@ -256,8 +256,10 @@ export class AmapBox {
     span: SpanOptions,
   ): Promise<GenerateResult> {
     const refresh = !!span.refresh;
-    const outsideSameLevel = !!span.outsideSameLevel;
-    const outside = !!span.outside || outsideSameLevel; // 目标同级隐含外部轮廓
+    const centerMode = parseCenter(span.center);
+    const ratioMode = typeof centerMode === "number"; // 方案二：目标占画幅比例
+    const outsideSameLevelReq = span.outsideSameLevel;
+    const outside = !!span.outside || !!outsideSameLevelReq || ratioMode; // 目标同级隐含外部轮廓；占比模式默认带同级
     const layout = span;
     const query = { name: root.name, adcode: root.adcode, level: root.level ?? "" };
     const local: string[] = [];
@@ -278,6 +280,7 @@ export class AmapBox {
       local.push(`往上级数 ${up} 超出范围（${landed.name} 只有 ${d} 级祖先），已按 ${d} 处理`);
       up = d;
     }
+    const outsideSameLevel = outsideSameLevelReq ?? (ratioMode && (up <= 1 || d <= 1));
     if (outsideSameLevel && !(up <= 1 || d <= 1)) {
       throw new Error(
         `outsideSameLevel 仅在 up <= 1 或目标为省级以上时可用：${landed.name} 处于第 ${d} 级（${landed.level}）、up=${up}`,
@@ -360,7 +363,21 @@ export class AmapBox {
     // 可用条件保证视图不超过最外层级：up=0 时最外层同级已覆盖目标同级（去重后为空）；
     // up=1 时「上一层」元素 = 已取回的「最外层同级」候选（同为第 d-1 级）。
     if (outsideSameLevel && up === 1) {
-      const viewBox = bboxOf([...units, ...(outline ? [outline] : [])]);
+      // 视图包围盒：默认取内容包围盒；占比模式取目标附近的小窗口（与渲染共用缩放公式），
+      // 否则会把「上一层」全量当成在视图内、白白取回大量边界。
+      let viewBox: BBox | null;
+      if (ratioMode) {
+        const tgtUnit =
+          outline && outline.adcode === landed.adcode
+            ? outline
+            : units.find((u) => u.adcode === landed.adcode);
+        const tb = tgtUnit ? bboxOf([tgtUnit]) : null;
+        viewBox = tb
+          ? centerRatioViewBox(tb.minLon, tb.minLat, tb.maxLon, tb.maxLat, centerMode as number, span.ratio)
+          : null;
+      } else {
+        viewBox = bboxOf([...units, ...(outline ? [outline] : [])]);
+      }
       if (viewBox) {
         for (const u of outsideUnits) {
           const b = bboxOf([u]);
@@ -383,6 +400,7 @@ export class AmapBox {
       targetLabels: layout.targetLabels,
       highlightContext: layout.highlightContext,
       targetBackground: layout.targetBackground,
+      center: layout.center,
       chain: chain.map((n) => n.region.adcode),
       target: landed.adcode,
       caption: landed.name,
@@ -435,6 +453,15 @@ export class AmapBox {
       throw new Error("padding 只接受非负数字");
     if (span.title !== undefined && typeof span.title !== "boolean")
       throw new Error("title 只接受布尔值");
+    if (span.center !== undefined) {
+      const c = span.center;
+      const ok =
+        typeof c === "boolean" ||
+        c === "outline" ||
+        c === "target" ||
+        (typeof c === "number" && Number.isFinite(c) && c > 0 && c <= 1);
+      if (!ok) throw new Error('center 只接受布尔值、"outline"、"target" 或 (0,1] 的数字');
+    }
 
     const { regions, notes } = await this.resolve(keyword, !!span.refresh);
     if (!regions.length) throw new Error(`没有匹配「${keyword}」的行政区`);

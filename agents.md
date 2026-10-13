@@ -40,7 +40,7 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
 
 - **构造参数**（对象形式，只有这三个）：`Key`（string）、`fetch`（`(url) => object`）、`cache`（`{ read(key), write(key, value) }`，read/write 允许同步或返回 Promise）。
 - `resolve(keyword, refresh?)` → `{ regions, notes }`：名称/adcode → 命中的行政区（索引优先，未命中回落在线查询）。
-- `generate(keyword, { up?, down?, outside?, outsideSameLevel?, ratio?, padding?, title?, contextLabels?, targetLabels?, highlightContext?, targetBackground?, refresh? })` → `GenerateResult[]`：每个命中一张图。
+- `generate(keyword, { up?, down?, outside?, outsideSameLevel?, ratio?, padding?, title?, contextLabels?, targetLabels?, highlightContext?, targetBackground?, center?, refresh? })` → `GenerateResult[]`：每个命中一张图。
   - `up` 默认 `0`（`"max"` = 到国家级，超过目标深度会被夹到深度）；`down` 只允许 `0 | 1`，默认 `0`。
   - `outside` 默认 `false`：拓展外部轮廓，把「最外层级」（`R(d-up)`，如 杭州 u1 / 浙江 u0 都是浙江省）同级、
     落在当前视图内的其他行政区轮廓也画出来（更细更淡、不加标签、不往下细分、不改变缩放）。
@@ -52,16 +52,20 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
     仅目标节点亮白；设 `true` 则它们全部亮白（`false` 时退出「查询链高亮」的分级亮度）。`targetBackground` 默认 `true` ——
     给目标节点所在区域填充半透明背景高亮（目标落到整体轮廓上时填充轮廓区域）。
   - 标签：`contextLabels` 默认 `true`（非目标节点/上下文的标签）、`targetLabels` 默认 `true`（目标节点自身的标签），可分别关闭。
+  - 目标居中：`center` 默认 `false`（内容包围盒居中）。`true` / `"outline"` = 目标质心居中，并保证最外层轮廓
+    `R(d-up)` 完整可见（目标偏居轮廓一角时留白较多；目标即轮廓时与默认一致）；`"target"` = 占比模式默认 `0.5`；
+    数字（`0 < N <= 1`）= 目标包围盒长边占画幅可绘区长边的比例，目标质心居中、上下文超出画幅即裁掉，
+    并默认开启 `outsideSameLevel`（仅在其可用条件满足时）。
   - 每项：`query` / `landed`（实际落到的行政区）、`up` / `down`（解析后）、`file`（建议文件名）、`svg`（文本，失败为 `null`）、`blocks`、`outline`、`neighbors`（画出的外部轮廓区块数）、`notes`。
   - 找不到匹配 → `throw`；某一张画不出来 → 该项 `svg: null` + `notes` 说明，不中断其余。
   - 解析层提示（索引构建、匹配上限、限流重试）只挂在第一个结果上，避免多命中时重复。
 - `ready(refresh?)`：只预热全国索引。
-- 另有纯函数导出：`svgFileName`、`parsePolyline` / `toUnit` / `signedArea` / `centroid` / `pointInRing` / `simplify`、`renderMap` / `wrapSvg`。
+- 另有纯函数导出：`svgFileName`、`parsePolyline` / `toUnit` / `signedArea` / `centroid` / `pointInRing` / `simplify`、`renderMap` / `wrapSvg` / `parseRatio` / `parseCenter` / `centerRatioViewBox`。
 
 ## CLI 运行
 
 ```bash
-bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outside] [--ratio auto|W:H|N] [--padding N] [--no-title] [--no-context-labels] [--no-target-label] [--highlight-context] [--no-target-bg] [--out <dir>] [--cache <dir>] [--refresh]
+bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outside] [--ratio auto|W:H|N] [--padding N] [--no-title] [--no-context-labels] [--no-target-label] [--highlight-context] [--no-target-bg] [--center outline|target|N] [--out <dir>] [--cache <dir>] [--refresh]
 # 或装好之后：amap-box <行政区名|adcode> [选项]
 ```
 
@@ -82,6 +86,7 @@ bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outsid
 | `--no-target-label` | 不画目标节点自身的标签 | — |
 | `--highlight-context` | 高亮上级轮廓：整体轮廓 + 目标以外的线都画亮白 | — |
 | `--no-target-bg` | 不给目标节点所在区域填充背景高亮 | — |
+| `--center [outline\|target\|N]` | 让目标居中：`outline` = 目标居中且整体轮廓完整；`target` = 目标占画幅长边 `0.5`；`N`（`0<N<=1`）= 目标占画幅长边比例（`target`/`N` 隐含 `--outside-same-level`） | — |
 | `--out` / `--cache` | 输出目录 / 边界+索引缓存目录 | `out` / `districts` |
 | `--refresh` | 忽略缓存重新拉取（含重建全国索引） | — |
 
@@ -132,6 +137,10 @@ CLI 的磁盘缓存把键映射成 `<cache>/<key>.json`（键 `index` 与 `<adco
 - **目标同级外部轮廓**（`--outside-same-level` / `outsideSameLevel`）：再把「与目标同层级」`d`、落在视图内的区域也描一遍
   （样式同外部轮廓）。为控成本，先筛出视图内的「上一层」（第 `d-1` 级）元素，再取其第 `d` 级下级（`up=1` 时「上一层」= 已取回的
   「最外层同级」候选；`up=0` 时最外层同级已覆盖目标同级，去重后为空）。**仅当 `up <= 1` 或目标为省级以上可用**，否则报错。
+- **目标居中**（`--center` / `center`，默认不居中）：默认按内容包围盒居中。`outline`（= `true`）改为按**目标质心**居中，
+  并保证最外层轮廓 `R(d-up)` 完整可见（取以目标中心为中心、含轮廓的对称方框；目标偏居轮廓一角时留白较多，
+  目标即轮廓时与默认一致）。数字占比（`target` = `0.5`）则按目标缩放取景：目标包围盒长边 = 比例 × 画幅可绘区长边，
+  目标质心居中，上下文超出画幅即被裁掉；此时 `outsideSameLevel` 默认开启（在其可用条件满足时），`ratio` 决定取景框（可绘区）宽高比。
 - **版式**：内容长边固定缩放到 `MAP_LONG = 1000px`，四周留白 `padding`（默认 `24`），顶部标题带 `CAPTION_H = 46`
   （`title: false` 时标题与标题带一起去掉）；`ratio`（默认 `"auto"`）只决定画布宽高比 —— 给定时内容**不重新缩放**，
   居中后把多余空间补成留白，所以 `auto` 与任何比例下内容的实际尺寸一致。

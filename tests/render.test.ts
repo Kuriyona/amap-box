@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { CAPTION_H, DIM_OPACITY, DIM_STROKE, HOT_TARGET, PAD, renderMap, TARGET_FILL, wrapSvg, type RenderUnit } from "../src/render.js";
+import { CAPTION_H, DIM_OPACITY, DIM_STROKE, HOT_TARGET, MAP_LONG, PAD, renderMap, TARGET_FILL, wrapSvg, type RenderUnit } from "../src/render.js";
 
 const square = (x: number, s: number) => [
   [120 + x, 30],
@@ -155,6 +155,82 @@ describe("renderMap", () => {
     const tgtOff = renderMap({ units, outline: null, caption: "T", target: "1", targetLabels: false })!;
     expect(tgtOff.markup).not.toContain(">甲市</text>");
     expect(tgtOff.markup).toContain(">乙市</text>");
+  });
+});
+
+describe("目标居中", () => {
+  const outline = {
+    name: "省",
+    adcode: "9",
+    center: [122.5, 30.5] as number[],
+    rings: [[[120, 30], [125, 30], [125, 31], [120, 31]]] as Array<Array<[number, number]>>,
+  };
+  // 每个 <path> 的包围盒，按出现顺序（区块…，轮廓在最后）
+  const pathBoxes = (markup: string) =>
+    [...markup.matchAll(/<path d="([^"]+)"/g)].map((m) => {
+      const pts = [...m[1]!.matchAll(/(-?[\d.]+),(-?[\d.]+)/g)].map((p) => [+p[1]!, +p[2]!]);
+      const xs = pts.map((p) => p[0]!);
+      const ys = pts.map((p) => p[1]!);
+      return {
+        minx: Math.min(...xs),
+        maxx: Math.max(...xs),
+        miny: Math.min(...ys),
+        maxy: Math.max(...ys),
+      };
+    });
+
+  it("默认：仍以内容包围盒居中，目标偏在一侧", () => {
+    const units = [unit("甲", "1", 0), unit("乙", "2", 3)];
+    const map = renderMap({ units, outline, caption: "T", target: "2" })!;
+    const b = pathBoxes(map.markup)[1]!;
+    expect((b.minx + b.maxx) / 2).toBeGreaterThan(map.W / 2);
+  });
+
+  it("center:outline：目标居中，且最外层轮廓完整落在画布内", () => {
+    const units = [unit("甲", "1", 0), unit("乙", "2", 3)];
+    const map = renderMap({ units, outline, caption: "T", target: "2", center: "outline" })!;
+    const boxes = pathBoxes(map.markup);
+    const b = boxes[1]!;
+    expect((b.minx + b.maxx) / 2).toBeCloseTo(map.W / 2, 0);
+    const ob = boxes.at(-1)!;
+    expect(ob.minx).toBeGreaterThanOrEqual(-0.5);
+    expect(ob.maxx).toBeLessThanOrEqual(map.W + 0.5);
+    expect(ob.miny).toBeGreaterThanOrEqual(-0.5);
+    expect(ob.maxy).toBeLessThanOrEqual(map.H + 0.5);
+  });
+
+  it("center:<N>：目标长边 = N*MAP_LONG，且在可绘区居中", () => {
+    const u = unit("甲", "1", 0);
+    const map = renderMap({ units: [u], outline: null, caption: "T", target: "1", center: 0.5 })!;
+    const b = pathBoxes(map.markup)[0]!;
+    const long = Math.max(b.maxx - b.minx, b.maxy - b.miny);
+    expect(long).toBeCloseTo(0.5 * MAP_LONG, 0);
+    expect((b.minx + b.maxx) / 2).toBeCloseTo(map.W / 2, 0); // 水平居中
+    // 垂直：居中于可绘区（去掉顶部标题带与留白）
+    const cy = (b.miny + b.maxy) / 2;
+    expect(cy - (CAPTION_H + PAD)).toBeCloseTo((map.H - CAPTION_H - 2 * PAD) / 2, 0);
+  });
+
+  it("center:\"target\" 等价于 0.5", () => {
+    const u = unit("甲", "1", 0);
+    const half = renderMap({ units: [u], outline: null, caption: "T", target: "1", center: 0.5 })!;
+    const tgt = renderMap({ units: [u], outline: null, caption: "T", target: "1", center: "target" })!;
+    expect(tgt.W).toBeCloseTo(half.W, 6);
+    expect(tgt.H).toBeCloseTo(half.H, 6);
+  });
+
+  it("center:<N> 时 ratio 决定取景框（可绘区）宽高比", () => {
+    const u = unit("甲", "1", 0);
+    const map = renderMap({ units: [u], outline: null, caption: "T", target: "1", center: 0.5, ratio: 2 })!;
+    expect((map.W - 2 * PAD) / (map.H - CAPTION_H - 2 * PAD)).toBeCloseTo(2, 6);
+  });
+
+  it("目标不存在时静默回落到内容居中", () => {
+    const u = unit("甲", "1", 0);
+    const a = renderMap({ units: [u], outline: null, caption: "T" })!;
+    const b = renderMap({ units: [u], outline: null, caption: "T", center: 0.5 })!;
+    expect(b.W).toBeCloseTo(a.W, 6);
+    expect(b.H).toBeCloseTo(a.H, 6);
   });
 });
 

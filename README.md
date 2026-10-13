@@ -56,7 +56,7 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
 | 方法 | 说明 |
 |---|---|
 | `resolve(keyword, refresh?)` | 名称 / adcode → `{ regions, notes }`。先查索引，索引里没有的（乡镇 / 街道级）回落在线查询 |
-| `generate(keyword, { up?, down?, outside?, outsideSameLevel?, ratio?, padding?, title?, contextLabels?, targetLabels?, highlightContext?, targetBackground?, refresh? })` | 每个命中出一张图，返回 `GenerateResult[]`（不落盘，`svg` 给你自己写） |
+| `generate(keyword, { up?, down?, outside?, outsideSameLevel?, ratio?, padding?, title?, contextLabels?, targetLabels?, highlightContext?, targetBackground?, center?, refresh? })` | 每个命中出一张图，返回 `GenerateResult[]`（不落盘，`svg` 给你自己写） |
 | `ready(refresh?)` | 只预热全国索引 |
 
 `GenerateResult` 字段：
@@ -89,15 +89,21 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
 - `highlightContext`：是否高亮**上级轮廓** —— 即整体轮廓 + 目标节点以外的全部区块线，默认 `false`。
   默认（`false`）时它们只画细灰线，仅目标节点保持亮白，形成聚焦目标的观感；`true` 时全部亮白。
 - `targetBackground`：是否给**目标节点所在区域**填充半透明背景高亮，默认 `true`（目标落到整体轮廓上时填充轮廓区域）。
+- `center`：是否让**目标**（而非内容包围盒）居中，默认 `false`（内容居中）。
+  - `true` / `"outline"`（方案一）：目标质心居中，并保证最外层轮廓 `R(d-up)` 完整可见（多余空间补成留白）。
+    目标偏居轮廓一角时留白较多；目标即轮廓（如 `u0d0`）时与默认一致。
+  - `"target"`（方案二）：目标质心居中，目标包围盒长边占画幅可绘区长边的 `0.5`。
+  - 数字（`0 < N <= 1`）：同方案二，比例取 `N`。此时上下文（如上级轮廓）超出画幅会被裁掉，
+    且 `outsideSameLevel` 默认开启（在其可用条件满足时，如 `up <= 1`）；`ratio` 决定取景框（可绘区）的宽高比。
 - `refresh`：忽略缓存重新拉取（含重建全国索引）。
 
 失败语义：**没有匹配** → `throw`；某个命中**画不出来** → 该项 `svg: null` 并附 `notes`，不影响其余。
 
 ### 纯函数导出
 
-`svgFileName`、`parseRatio`、`parsePolyline` / `toUnit` / `signedArea` / `centroid` / `pointInRing` / `simplify`、
+`svgFileName`、`parseRatio` / `parseCenter` / `centerRatioViewBox`、`parsePolyline` / `toUnit` / `signedArea` / `centroid` / `pointInRing` / `simplify`、
 `renderMap` / `wrapSvg`，以及 `AmapBoxOptions` / `AmapCache` / `AmapFetch` / `SpanOptions` / `LayoutOptions` /
-`MapRatio` / `GenerateResult` 等类型。
+`MapRatio` / `CenterMode` / `GenerateResult` 等类型。
 
 ## CLI
 
@@ -120,6 +126,7 @@ amap-box <行政区名|adcode> [选项]
 | `--no-target-label` | 不画目标节点自身的标签 | — |
 | `--highlight-context` | 高亮上级轮廓：整体轮廓 + 目标以外的线都画亮白（默认只画细灰线） | — |
 | `--no-target-bg` | 不给目标节点所在区域填充背景高亮 | — |
+| `--center [outline\|target\|N]` | 让目标居中：`outline` = 目标居中且整体轮廓完整；`target` = 目标占画幅长边 `0.5`；`N`（`0<N<=1`）= 目标占画幅长边比例（`target`/`N` 隐含 `--outside-same-level`） | — |
 | `--out <dir>` | 输出目录 | `out` |
 | `--cache <dir>` | 边界 + 索引缓存目录 | `districts` |
 | `--refresh` | 忽略缓存重新拉取（含重建全国索引） | — |
@@ -134,9 +141,15 @@ amap-box 杭州市 --up 1 --down 1 # 浙江省 11 市 + 杭州市 13 区县，�
 amap-box 杭州市 --up max --down 1 # 34 省 + 11 市 + 13 区县，轮廓 = 国家级
 amap-box 杭州市 --up 1 --down 1 --outside # 上面那张再补上视图内的相邻省份
 amap-box 杭州市 --ratio 1 --no-title  # 1:1 画幅、不画标题（适合当图标/贴图）
+amap-box 杭州市 --up 1 --center outline # 目标居中，且浙江省完整可见
+amap-box 杭州市 --up 1 --center 0.5     # 目标居中并占画幅长边一半，同级相邻区域一并画出
 amap-box 朝阳区                 # 同名多结果各出一张，靠 adcode 区分
 bun src/cli/gen_svg.ts 杭州市   # 仓库内开发：直接跑源码，无需构建
 ```
+
+Key 来源：环境变量 `AMAP_KEY`，或当前目录 `.env` 里的 `KEY=...`。
+出图名一律 `[名称]-[adcode]-u<K>d<M>.svg`，写入 `--out`；`adcode` 天然唯一，重名与不同跨度都不会互相覆盖。
+版式类选项（`ratio` / `padding` / `center` …）不体现在文件名里，同名同跨度会互相覆盖。
 
 ### 审阅页
 
@@ -170,6 +183,10 @@ amap-box-review 杭州市 上海市 朝阳区    # 指定目标（同名多结�
   `R(d-up)` 已是国家级时没有同级。
 - **目标同级外部轮廓**（`outsideSameLevel`）：再把**与目标同层级** `d`、落在视图内的区域也描一遍（样式同上）。
   先筛出视图内的「上一层」（`d-1` 级）元素，再取它们的第 `d` 级下级，避免整棵展开；仅 `up<=1` 或目标为省级以上可用。
+- **目标居中**（`center`，默认不居中）：默认按内容包围盒居中。`"outline"`（= `true`）改为按**目标质心**居中，
+  并保证最外层轮廓 `R(d-up)` 完整可见（目标偏居一角时留白较多）。数字占比（`"target"` = `0.5`）则按目标缩放取景：
+  目标包围盒长边 = 比例 × 画幅可绘区长边、目标质心居中，上下文超出画幅即被裁掉，同级外部轮廓默认开启，
+  `ratio` 决定取景框宽高比。
 - **版式**：内容长边固定 `1000px`，留白 `padding`（默认 `24`），顶部标题带（`title: false` 时去掉）；
   `ratio` 只决定画布宽高比，给定时内容不重新缩放，居中后把多余空间补成留白。
 - 线宽、字号都按图内相对层级统一推导。

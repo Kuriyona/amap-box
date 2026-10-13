@@ -61,6 +61,15 @@ export interface LayoutOptions {
   highlightContext?: boolean;
   /** 是否给目标节点所在区域填充半透明高亮背景。默认 `true`。 */
   targetBackground?: boolean;
+  /**
+   * 是否让**目标**（而非内容包围盒）居中，默认 `false`。
+   * - `true` / `"outline"`（方案一）：目标质心居中，并保证最外层轮廓 `R(d-up)` 完整可见
+   *   （多余空间补成留白）；目标偏居轮廓一角时会留下较多空白。`u0d0` 等目标即轮廓时与默认一致。
+   * - `"target"`（方案二）：目标质心居中，目标包围盒长边占画幅长边的 `0.5`。
+   * - 数字（`0 < N <= 1`）：同方案二，比例取 `N`。此时上下文（如上级轮廓）超出画幅即被裁掉，
+   *   且 `outsideSameLevel` 默认开启（在条件允许时）。
+   */
+  center?: boolean | "outline" | "target" | number;
 }
 
 /** 出图跨度与版式。 */

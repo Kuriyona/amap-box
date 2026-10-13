@@ -27,6 +27,9 @@ const USAGE = `用法: amap-box <行政区名|adcode> [选项]
   --no-target-label    不画目标节点自身的标签          (默认画)
   --highlight-context  高亮上级轮廓：整体轮廓 + 目标以外的线都亮白 (默认灰)
   --no-target-bg       不给目标节点所在区域填充背景高亮 (默认填)
+  --center [outline|target|N]  让目标居中 (默认不居中，内容居中)：
+                        outline = 目标居中且整体轮廓完整；target = 目标占画幅长边 0.5；
+                        N(0<N<=1) = 目标占画幅长边比例（target/N 隐含目标同级外部轮廓）
   --out <dir>    输出目录            (默认 out)
   --cache <dir>  边界+索引缓存目录     (默认 districts)
   --refresh      忽略缓存，重新拉取（含重建全国索引）
@@ -48,6 +51,7 @@ async function main() {
     noTargetBg: boolean;
     ratio?: string;
     padding?: string;
+    center?: string;
     up?: string;
     down?: string;
   } = {
@@ -81,6 +85,13 @@ async function main() {
     else if (a === "--no-target-bg") flags.noTargetBg = true;
     else if (a === "--ratio") flags.ratio = argv[++i];
     else if (a === "--padding") flags.padding = argv[++i];
+    else if (a === "--center") {
+      const next = argv[i + 1];
+      if (next !== undefined && !next.startsWith("-") && /^(outline|target|\d+(?:\.\d+)?)$/i.test(next)) {
+        flags.center = next;
+        i++;
+      } else flags.center = "outline"; // 裸 --center = 方案一
+    }
     else if (a === "--refresh") flags.refresh = true;
     else if (a === "-h" || a === "--help") {
       console.log(USAGE);
@@ -143,6 +154,17 @@ async function main() {
       process.exit(2);
     }
   }
+  let center: boolean | "outline" | "target" | number | undefined;
+  if (flags.center !== undefined) {
+    const v = String(flags.center).trim().toLowerCase();
+    if (v === "outline") center = "outline";
+    else if (v === "target") center = "target";
+    else if (/^\d+(?:\.\d+)?$/.test(v) && Number(v) > 0 && Number(v) <= 1) center = Number(v);
+    else {
+      console.error(`--center 只接受 outline、target 或 (0,1] 的数字，收到: ${flags.center}\n\n${USAGE}`);
+      process.exit(2);
+    }
+  }
 
   const KEY = loadKey();
   if (!KEY) {
@@ -157,8 +179,8 @@ async function main() {
     generated = await box.generate(keyword, {
       up: upReq,
       down: downReq,
-      outside: flags.outside,
-      outsideSameLevel: flags.outsideSameLevel,
+      outside: flags.outside || undefined,
+      outsideSameLevel: flags.outsideSameLevel || undefined,
       ratio,
       padding,
       title: !flags.noTitle,
@@ -166,6 +188,7 @@ async function main() {
       targetLabels: !flags.noTargetLabel,
       highlightContext: flags.highlightContext,
       targetBackground: !flags.noTargetBg,
+      center,
       refresh: flags.refresh,
     });
   } catch (e) {
@@ -192,6 +215,7 @@ async function main() {
     if (flags.noTargetLabel) bits.push("无目标标签");
     if (flags.highlightContext) bits.push("高亮上级轮廓");
     if (flags.noTargetBg) bits.push("无目标背景");
+    if (flags.center !== undefined) bits.push(`目标居中 ${flags.center}`);
     if (flags.outsideSameLevel) bits.push("含目标同级轮廓");
     console.log(`  已写入 ${file}  （${bits.join("；")}）`);
     written++;

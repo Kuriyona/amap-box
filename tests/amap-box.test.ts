@@ -280,6 +280,38 @@ describe("generate", () => {
   });
 });
 
+describe("目标居中", () => {
+  it("center:数字 -> 目标居中，且默认开启目标同级外部轮廓；文件名不含 center", async () => {
+    const { box } = makeEnv();
+    const [r] = await box.generate("杭州市", { up: 1, down: 0, center: 0.5 });
+    expect(r.svg).toBeTruthy();
+    expect(r.file).toBe("杭州市-330100-u1d0.svg");
+    expect(r.notes.join("\n")).toContain("目标同级外部轮廓"); // 占比模式默认开启
+  });
+
+  it('center: "target" / "outline" / true / 数字 均可用', async () => {
+    const { box } = makeEnv();
+    for (const c of ["target", "outline", true, 0.8] as const) {
+      const [r] = await box.generate("杭州市", { up: 1, down: 0, center: c });
+      expect(r.svg, String(c)).toBeTruthy();
+    }
+  });
+
+  it("非法 center 报错", async () => {
+    const { box } = makeEnv();
+    await expect(box.generate("杭州市", { center: 0 })).rejects.toThrow(/center/);
+    await expect(box.generate("杭州市", { center: 1.5 })).rejects.toThrow(/center/);
+    await expect(box.generate("杭州市", { center: "huge" as never })).rejects.toThrow(/center/);
+  });
+
+  it("center 数字 + up>=2（不满足同级条件）：不默认开启同级轮廓，也不报错", async () => {
+    const { box } = makeEnv();
+    const [r] = await box.generate("临安区", { up: 2, down: 0, center: 0.5 });
+    expect(r.svg).toBeTruthy();
+    expect(r.notes.join("\n")).not.toContain("目标同级外部轮廓");
+  });
+});
+
 describe("缓存", () => {
   it("二次调用命中缓存，不再打接口", async () => {
     const { box, calls } = makeEnv();
