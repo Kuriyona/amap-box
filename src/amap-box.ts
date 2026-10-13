@@ -4,11 +4,22 @@
  * 构造：`new AmapBox({ Key, fetch, cache })`。取数与缓存都由调用方注入，
  * 因此在 Node / Bun / 浏览器 / 测试里都能用同一份逻辑。
  */
-import type { AmapDistrict, AmapBoxOptions, GenerateResult, ResolveResult, SpanOptions } from "./types.js";
+import type {
+  AmapDistrict,
+  AmapBoxOptions,
+  GenerateResult,
+  MapMeta,
+  PerfStats,
+  ResolveResult,
+  SpanOptions,
+} from "./types.js";
 import { toUnit, type Unit } from "./geometry.js";
-import { centerRatioViewBox, parseCenter, parseRatio, renderMap, wrapSvg, type RenderUnit } from "./render.js";
+import { centerRatioViewBox, PAD, parseCenter, parseRatio, renderMap, wrapSvg, type RenderUnit } from "./render.js";
+import pkg from "../package.json";
 
 const API = "https://restapi.amap.com/v3/config/district";
+const GENERATOR = `${pkg.name}@${pkg.version}`;
+const ATTRIBUTION = "© 高德地图（AMap）行政区划数据";
 const COUNTRY = "100000";
 /** 只有这三级有边界数据；street（街道/乡镇）接口不返回 polyline，且 adcode 与其上级相同。 */
 const DRAWABLE: Record<string, true> = { province: true, city: true, district: true };
@@ -30,6 +41,12 @@ interface BBox {
   maxLon: number;
   maxLat: number;
 }
+
+/** 出图过程的缓存统计收集器（键去重、按首次访问顺序）。 */
+const newPerf = (): PerfStats => ({ cacheHits: [], cacheMisses: [] });
+const record = (list: string[], key: string) => {
+  if (!list.includes(key)) list.push(key);
+};
 
 /** 一组区块的经纬度包围盒（视图的近似），无点返回 null。 */
 const bboxOf = (units: Unit[]): BBox | null => {
@@ -117,21 +134,29 @@ export class AmapBox {
     return { status: "0", info };
   }
 
-  async #readCache(key: string, refresh: boolean): Promise<ApiResponse | null> {
-    if (refresh) return null;
+  async #readCache(key: string, refresh: boolean, perf?: PerfStats): Promise<ApiResponse | null> {
+    const miss = () => {
+      if (perf) record(perf.cacheMisses, key);
+      return null;
+    };
+    if (refresh) return miss();
     let raw: string | null | undefined;
     try {
       raw = await this.#cache.read(key);
     } catch {
-      return null;
+      return miss();
     }
-    if (!raw) return null;
+    if (!raw) return miss();
     try {
       const d = JSON.parse(raw) as ApiResponse;
-      return d?.districts?.length ? d : null;
+      if (d?.districts?.length) {
+        if (perf) record(perf.cacheHits, key);
+        return d;
+      }
     } catch {
-      return null;
+      /* 缓存内容坏了，当未命中重新拉 */
     }
+    return miss();
   }
 
   async #writeCache(key: string, d: ApiResponse): Promise<void> {
@@ -139,8 +164,13 @@ export class AmapBox {
   }
 
   /** 单个行政区（仅自身，含边界）。 */
-  async #fetchRegion(adcode: string, refresh: boolean, notes: string[]): Promise<AmapDistrict | null> {
-    const hit = await this.#readCache(adcode, refresh);
+  async #fetchRegion(
+    adcode: string,
+    refresh: boolean,
+    notes: string[],
+    perf: PerfStats,
+  ): Promise<AmapDistrict | null> {
+    const hit = await this.#readCache(adcode, refresh, perf);
     if (hit) return hit.districts![0];
     const d = await this.#apiQuery({ keywords: adcode, subdistrict: "0" }, notes);
     if (d.status !== "1" || !d.districts?.length) return null;
@@ -152,8 +182,8 @@ export class AmapBox {
   // ------------------------------------------------------------- index
   // 全国行政区划索引：一次请求拿到 国家->省->地->县 整棵树（extensions=base，不含边界）。
   // 之后所有名称/adcode 查找与层级链都只认它；只有索引缺失或 refresh 才重建。
-  async #loadIndex(refresh: boolean, notes: string[]): Promise<AmapDistrict | null> {
-    const hit = await this.#readCache("index", refresh);
+  async #loadIndex(refresh: boolean, notes: string[], perf: PerfStats): Promise<AmapDistrict | null> {
+    const hit = await this.#readCache("index", refresh, perf);
     if (hit) return hit.districts![0];
     notes.push("首次运行：拉取全国行政区划索引（一次请求，不含边界）");
     const d = await this.#apiQuery({ keywords: COUNTRY, subdistrict: "3", extensions: "base" }, notes);
@@ -164,9 +194,9 @@ export class AmapBox {
   }
 
   /** 载入并扁平化索引。成功返回 true。 */
-  async #ensureIndex(refresh: boolean, notes: string[]): Promise<boolean> {
+  async #ensureIndex(refresh: boolean, notes: string[], perf: PerfStats): Promise<boolean> {
     if (this.#indexLoaded && !refresh) return true;
-    const root = await this.#loadIndex(refresh, notes);
+    const root = await this.#loadIndex(refresh, notes, perf);
     if (!root) return false;
     const byAdcode = new Map<string, AmapDistrict>(); // 省直辖/兵团下级与上级同 adcode，保留上层那个
     const allNodes: AmapDistrict[] = []; // 平铺的全部节点，供按名查找（含同 adcode 的街镇）
@@ -228,8 +258,7 @@ export class AmapBox {
   // ------------------------------------------------------------- public
   /** 确保全国索引就绪（惰性加载）。 */
   async ready(refresh = false): Promise<void> {
-    const notes: string[] = [];
-    if (!(await this.#ensureIndex(refresh, notes))) throw new Error("无法获取全国行政区划索引");
+    if (!(await this.#ensureIndex(refresh, [], newPerf()))) throw new Error("无法获取全国行政区划索引");
   }
 
   /**
@@ -237,8 +266,17 @@ export class AmapBox {
    * 索引（国家->省->地->县）里查不到的名字（多为乡镇/街道级）才回落在线查询。
    */
   async resolve(keyword: string, refresh = false): Promise<ResolveResult> {
-    const notes: string[] = [];
-    if (!(await this.#ensureIndex(refresh, notes))) throw new Error("无法获取全国行政区划索引");
+    return this.#resolve(keyword, refresh, [], newPerf());
+  }
+
+  /** `resolve` 的内部版：提示与缓存统计写进调用方给的容器（`generate` 用以把索引那一次算进第一张图）。 */
+  async #resolve(
+    keyword: string,
+    refresh: boolean,
+    notes: string[],
+    perf: PerfStats,
+  ): Promise<ResolveResult> {
+    if (!(await this.#ensureIndex(refresh, notes, perf))) throw new Error("无法获取全国行政区划索引");
     let regions = this.#searchIndex(keyword, notes);
     if (!regions.length) {
       const found = await this.#apiQuery({ keywords: keyword, subdistrict: "1" }, notes);
@@ -254,6 +292,7 @@ export class AmapBox {
     down: 0 | 1,
     shared: string[],
     span: SpanOptions,
+    perf: PerfStats,
   ): Promise<GenerateResult> {
     const refresh = !!span.refresh;
     const centerMode = parseCenter(span.center);
@@ -263,8 +302,6 @@ export class AmapBox {
     const layout = span;
     const query = { name: root.name, adcode: root.adcode, level: root.level ?? "" };
     const local: string[] = [];
-    const finish = (extra: Partial<GenerateResult> & { up: number; file: string }) =>
-      ({ query, landed: query, down, svg: null, blocks: 0, outline: false, neighbors: 0, ...extra, notes: [...shared, ...local] }) as GenerateResult;
 
     // 顺 AMap 的树把目标链拉出来：chain[0] = 国家级 … chain[d] = 目标本身
     const chain = this.#buildChain(root.adcode);
@@ -289,6 +326,47 @@ export class AmapBox {
     const start = d - up + 1; // 这张图画的第一级
     const end = d + down; // 最后一级
     const file = svgFileName(landed, up, down);
+    // 元数据：同一参数下必须逐字节一致（review 页按 SVG 哈希找等价组合），所以不放时间戳
+    const meta: MapMeta = {
+      generator: GENERATOR,
+      source: API,
+      attribution: ATTRIBUTION,
+      query,
+      landed: landedInfo,
+      chain: chain.map((n) => ({
+        name: n.region.name,
+        adcode: n.region.adcode,
+        level: n.region.level ?? "",
+      })),
+      span: {
+        up,
+        down,
+        outside,
+        outsideSameLevel,
+        ratio: span.ratio ?? "auto",
+        padding: span.padding ?? PAD,
+        title: span.title ?? true,
+        contextLabels: span.contextLabels ?? true,
+        targetLabels: span.targetLabels ?? true,
+        targetBackground: span.targetBackground ?? true,
+        center: span.center ?? false,
+        ...(span.colors ? { colors: span.colors } : {}),
+      },
+    };
+    const finish = (extra: Partial<GenerateResult> & { up: number; file: string }) =>
+      ({
+        query,
+        landed: landedInfo,
+        down,
+        meta,
+        perf,
+        svg: null,
+        blocks: 0,
+        outline: false,
+        neighbors: 0,
+        ...extra,
+        notes: [...shared, ...local],
+      }) as GenerateResult;
 
     // 每级取「上一级节点的全部下级」；depth 用本图内的相对层级（最上层 = 0）
     const units: RenderUnit[] = [];
@@ -296,7 +374,7 @@ export class AmapBox {
       const parent = chain[lvl - 1];
       let added = 0;
       for (const c of (parent.children ?? []).filter((x) => x.level && DRAWABLE[x.level])) {
-        const full = await this.#fetchRegion(c.adcode, refresh, local);
+        const full = await this.#fetchRegion(c.adcode, refresh, local, perf);
         if (full?.polyline) {
           units.push({ ...toUnit(full), depth: lvl - start });
           added++;
@@ -318,12 +396,12 @@ export class AmapBox {
     let outline: Unit | null = null;
     if (units.length) {
       // 本图最上层 = R(d-up)；索引不带边界，单独取自身的 polyline
-      const self = await this.#fetchRegion(chain[start - 1].region.adcode, refresh, local);
+      const self = await this.#fetchRegion(chain[start - 1].region.adcode, refresh, local, perf);
       if (self?.polyline) outline = toUnit(self);
     } else {
       // 没有任何下级可画（down 0，或目标是叶子）-> 退化为只画自身轮廓
       // 街道/乡镇级自身没有边界，退到它实际落到的那个行政区
-      const self = await this.#fetchRegion(landed.adcode, refresh, local);
+      const self = await this.#fetchRegion(landed.adcode, refresh, local, perf);
       if (!self?.polyline) {
         local.push(`${landed.name} 没有边界数据，无法出图`);
         return finish({ up, file, landed: landedInfo });
@@ -353,7 +431,7 @@ export class AmapBox {
     const fetchUnits = async (cands: AmapDistrict[]) => {
       const out: RenderUnit[] = [];
       for (const c of cands) {
-        const full = await this.#fetchRegion(c.adcode, refresh, local);
+        const full = await this.#fetchRegion(c.adcode, refresh, local, perf);
         if (full?.polyline) out.push({ ...toUnit(full), depth: 0 });
       }
       return out;
@@ -429,7 +507,9 @@ export class AmapBox {
       up,
       down,
       file,
-      svg: wrapSvg(map),
+      svg: wrapSvg(map, meta),
+      meta,
+      perf,
       blocks: units.length,
       outline: !!outline,
       neighbors: map.outside,
@@ -473,12 +553,16 @@ export class AmapBox {
       if (!ok) throw new Error('center 只接受布尔值、"outline"、"target" 或 (0,1] 的数字');
     }
 
-    const { regions, notes } = await this.resolve(keyword, !!span.refresh);
+    // 解析层（索引等）只做一次，其缓存统计并进第一张图 —— 与 notes 的处理一致
+    const resolvePerf = newPerf();
+    const { regions, notes } = await this.#resolve(keyword, !!span.refresh, [], resolvePerf);
     if (!regions.length) throw new Error(`没有匹配「${keyword}」的行政区`);
     const out: GenerateResult[] = [];
     for (let i = 0; i < regions.length; i++) {
       // 解析层的提示（索引构建/匹配上限/限流）只挂在第一个结果上，避免多命中时重复
-      out.push(await this.#renderOne(regions[i], upReq, downReq, i === 0 ? notes : [], span));
+      out.push(
+        await this.#renderOne(regions[i], upReq, downReq, i === 0 ? notes : [], span, i === 0 ? resolvePerf : newPerf()),
+      );
     }
     return out;
   }

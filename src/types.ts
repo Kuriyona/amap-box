@@ -99,6 +99,62 @@ export interface SpanOptions extends LayoutOptions {
   refresh?: boolean;
 }
 
+/** 行政区引用（名称 / adcode / 级别）。 */
+export interface RegionRef {
+  name: string;
+  adcode: string;
+  level: string;
+}
+
+/** 当前这张图实际使用的跨度与版式（已填默认值）。 */
+export interface MapSpan {
+  up: number;
+  down: 0 | 1;
+  outside: boolean;
+  outsideSameLevel: boolean;
+  ratio: MapRatio;
+  padding: number;
+  title: boolean;
+  contextLabels: boolean;
+  targetLabels: boolean;
+  targetBackground: boolean;
+  center: boolean | "outline" | "target" | number;
+  /** 仅在调用方给了 `colors` 时出现。 */
+  colors?: ColorOptions;
+}
+
+/**
+ * 图的元数据：既是 `GenerateResult.meta`，也序列化成 SVG 里内嵌的 `<metadata>` 元素
+ * （JSON 文本），让 SVG 文件自带出处与画的是什么。**不含时间戳**，保证同一参数出图逐字节一致。
+ */
+export interface MapMeta {
+  /** 生成器与版本，如 `@kuriyona/amap-box@0.1.0`。 */
+  generator: string;
+  /** 数据来源接口。 */
+  source: string;
+  /** 数据版权署名。 */
+  attribution: string;
+  /** 关键字命中的行政区。 */
+  query: RegionRef;
+  /** 实际落到的行政区。 */
+  landed: RegionRef;
+  /** 图上画到的层级链（国家级 → 目标），与副标题同源。 */
+  chain: RegionRef[];
+  /** 这张图实际用的跨度与版式。 */
+  span: MapSpan;
+}
+
+/**
+ * 出图过程的缓存统计（目前只含缓存命中情况）。只记**真的读了注入缓存**的调用：
+ * 索引已在本实例内存里复用（同一次 `generate` 之外的第二次调用）不算缓存访问，两张列表里都不出现。
+ */
+export interface PerfStats {
+  /** 命中缓存的键（`"index"` 与各 `<adcode>`），按首次访问顺序去重。 */
+  cacheHits: string[];
+  /** 未命中缓存、实际打了接口的键；`refresh` 强制绕过缓存时也记在这里。 */
+  cacheMisses: string[];
+}
+
 /** `resolve()` 的返回值。 */
 export interface ResolveResult {
   /** 命中的行政区（AMap 树里的节点）。 */
@@ -110,9 +166,9 @@ export interface ResolveResult {
 /** `generate()` 单张图的结果。 */
 export interface GenerateResult {
   /** 关键字命中的行政区。 */
-  query: { name: string; adcode: string; level: string };
+  query: RegionRef;
   /** 实际落到的行政区（乡镇/街道级会退到所属区县）。 */
-  landed: { name: string; adcode: string; level: string };
+  landed: RegionRef;
   /** 解析后的往上级数（`up` 超过目标深度时会被夹到深度）。 */
   up: number;
   /** 往下级数。 */
@@ -121,6 +177,10 @@ export interface GenerateResult {
   file: string;
   /** SVG 文本；无法出图时为 `null`。 */
   svg: string | null;
+  /** 元数据；与 SVG 里内嵌的 `<metadata>` 元素同源（后者是其 JSON 序列化）。 */
+  meta: MapMeta;
+  /** 这张图出的过程中缓存命中/未命中的键。 */
+  perf: PerfStats;
   /** 区块数（不含整体轮廓）。 */
   blocks: number;
   /** 是否有整体轮廓。 */

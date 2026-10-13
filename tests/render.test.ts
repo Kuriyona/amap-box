@@ -267,4 +267,15 @@ describe("wrapSvg", () => {
     expect(svg.endsWith("</svg>")).toBe(true);
     expect(svg).toContain(`viewBox="0 0 ${map.W.toFixed(1)} ${map.H.toFixed(1)}"`);
   });
+
+  it("给了 meta 就在开头内嵌 <metadata>（JSON，XML 转义）", () => {
+    const map = renderMap({ units: [unit("A", "1", 0)], outline: null, caption: "A" })!;
+    const meta = { generator: "x@1", name: "<杭州市 & 区>" };
+    const svg = wrapSvg(map, meta);
+    expect(svg).toContain(
+      `<metadata>{"generator":"x@1","name":"&lt;杭州市 &amp; 区&gt;"}</metadata>`,
+    );
+    expect(svg.indexOf("<metadata>")).toBeLessThan(svg.indexOf("<rect ")); // 在画布之前
+    expect(wrapSvg(map)).not.toContain("<metadata>"); // 未给则不加
+  });
 });

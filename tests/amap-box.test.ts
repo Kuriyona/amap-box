@@ -286,6 +286,47 @@ describe("generate", () => {
     await expect(box.generate("杭州市", { colors: "dark" as never })).rejects.toThrow(/colors/);
   });
 
+  it("meta/perf：SVG 内嵌元数据、结果带 meta 与缓存命中统计", async () => {
+    const { box } = makeEnv();
+    const [first] = await box.generate("杭州市");
+    expect(first.meta.generator).toMatch(/^@kuriyona\/amap-box@\d/);
+    expect(first.meta.source).toContain("restapi.amap.com/v3/config/district");
+    expect(first.meta.query).toEqual({ name: "杭州市", adcode: "330100", level: "city" });
+    expect(first.meta.landed).toEqual(first.meta.query);
+    expect(first.meta.chain.map((c) => c.adcode)).toEqual(["100000", "330000", "330100"]);
+    expect(first.meta.span).toEqual({
+      up: 0,
+      down: 0,
+      outside: false,
+      outsideSameLevel: false,
+      ratio: "auto",
+      padding: 24,
+      title: true,
+      contextLabels: true,
+      targetLabels: true,
+      targetBackground: true,
+      center: false,
+    });
+    // 结果里的 meta 就是 SVG 里那份（JSON 序列化）
+    const embedded = /<metadata>(.*)<\/metadata>/s.exec(first.svg!)![1]!;
+    expect(JSON.parse(embedded)).toEqual(first.meta);
+    // 首次：索引与目标边界都没缓存 -> 未命中
+    expect(first.perf.cacheMisses).toEqual(["index", "330100"]);
+    expect(first.perf.cacheHits).toEqual([]);
+    // 二次：索引已在实例内存里（不再读缓存），只有边界走缓存命中
+    const [second] = await box.generate("杭州市");
+    expect(second.perf.cacheHits).toEqual(["330100"]);
+    expect(second.perf.cacheMisses).toEqual([]);
+  });
+
+  it("meta 随参数变化（up/down/colors/center）", async () => {
+    const { box } = makeEnv();
+    const [r] = await box.generate("杭州市", { up: 1, down: 1, colors: { line: "#abcdef" }, center: "outline" });
+    expect(r.meta.span).toMatchObject({ up: 1, down: 1, colors: { line: "#abcdef" }, center: "outline" });
+    const [def] = await box.generate("杭州市");
+    expect(def.meta.span).not.toHaveProperty("colors"); // 未给则不出现
+  });
+
   it("非法跨度报错", async () => {
     const { box } = makeEnv();
     await expect(box.generate("杭州市", { down: 2 as never })).rejects.toThrow(/down/);
@@ -339,9 +380,11 @@ describe("缓存", () => {
     const { box, calls, indexHits } = makeEnv();
     await box.generate("杭州市");
     expect(indexHits()).toBe(1);
-    await box.generate("杭州市", { refresh: true });
+    const [r] = await box.generate("杭州市", { refresh: true });
     expect(indexHits()).toBe(2);
     expect(calls.length).toBeGreaterThan(1);
+    expect(r.perf.cacheHits).toEqual([]); // 强制绕过缓存 -> 全部算未命中
+    expect(r.perf.cacheMisses).toEqual(["index", "330100"]);
   });
 });
 

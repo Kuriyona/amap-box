@@ -469,12 +469,21 @@ export function renderMap({
   return { markup: out.join("\n"), W, H, bg, outside: outsideTotal, outsideTarget: outsideTargetDrawn };
 }
 
-/** 给渲染结果套上 `<svg>` 外壳。 */
-export function wrapSvg({ markup, W, H, bg = BG }: RenderOutput): string {
+/** 转义 XML 文本内容里必须转义的字符（`metadata` 内嵌的 JSON 用）。 */
+const escapeXml = (s: string) =>
+  s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" })[c]!);
+
+/**
+ * 给渲染结果套上 `<svg>` 外壳。给了 `meta`（任意可 JSON 序列化的对象）时，
+ * 在开头内嵌一个 `<metadata>` 元素，内容为其 JSON 文本 —— 让 SVG 文件自带出处与画的是什么。
+ */
+export function wrapSvg({ markup, W, H, bg = BG }: RenderOutput, meta?: unknown): string {
+  const metaTag = meta === undefined ? "" : `<metadata>${escapeXml(JSON.stringify(meta))}</metadata>\n`;
   return (
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W.toFixed(1)} ${H.toFixed(1)}" ` +
     `width="${W.toFixed(0)}" height="${H.toFixed(0)}" font-family="Noto Sans CJK SC, ` +
     `Microsoft YaHei, PingFang SC, sans-serif">\n` +
+    metaTag +
     `<rect x="0" y="0" width="${W.toFixed(1)}" height="${H.toFixed(1)}" fill="${bg}"/>\n` +
     `${markup}\n</svg>`
   );
