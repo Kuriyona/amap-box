@@ -8,7 +8,7 @@
 - **JS API**：`new AmapBox({ Key, fetch, cache })` —— 取数与缓存都由调用方注入，Node / Bun / 浏览器 / 测试里同一套逻辑。
 - **CLI**：`amap-box` 出图，`amap-box-review` 出人工审阅页。
 - 无运行时依赖（只用平台原生 `fetch` 与你注入的缓存）；ESM + CJS + 类型声明。
-- 首次运行拉一份**全国行政区划索引**（一次请求，不含边界），之后名称查找与层级链 **0 请求**。
+- 首次运行**零请求**：全国行政区划索引随包内置（发版时冻结），名称查找与层级链 **0 请求**；`refresh` 才去线上拉最新那份。
 - 接口限流自动退避重试。
 
 ## 安装
@@ -18,6 +18,9 @@ npm install @kuriyona/amap-box
 # 或
 bun add @kuriyona/amap-box
 ```
+
+包体：tarball 约 **240 KB**（其中约 190 KB 是随包内置的全国索引 + bbox 表 —— 换来首次运行零请求与离线解析）。
+无运行时依赖。
 
 ## JS API
 
@@ -49,7 +52,7 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
 |---|---|---|
 | `Key` | `string` | 高德 Web 服务 key |
 | `fetch` | `(url: string, signal?: AbortSignal) => object \| Promise<object>` | 给定完整 URL（已含 key），返回**已解析**的响应对象。第二个参数是可选的中止信号，可直接透传 |
-| `cache` | `{ read(key), write(key, value) }` | 键值缓存。`read` 返回 `string \| null \| undefined \| Promise<…>`，`write` 返回 `void \| Promise<void>`；值一律是字符串（库内部 JSON 序列化）。键为 `"index"`（全国索引）与各 `<adcode>` |
+| `cache` | `{ read(key), write(key, value) }` | 键值缓存。`read` 返回 `string \| null \| undefined \| Promise<…>`，`write` 返回 `void \| Promise<void>`；值一律是字符串（库内部 JSON 序列化）。键为 `"index"`（全国索引，**可以一直不给** —— 缓存里没有时用内置那份）与各 `<adcode>` |
 | `signal?` | `AbortSignal` | 缺省中止信号，`generate` / `resolve` / `ready` 都生效（可被各调用的 `signal` 覆盖） |
 
 ### 方法
@@ -70,7 +73,7 @@ for (const m of maps) if (m.svg) writeFileSync(m.file, m.svg);
 | `svg` | SVG 文本；这张画不出来时为 `null` |
 | `hash` | `svg` 的 sha256（小写十六进制）；`svg` 为 `null` 时为 `null`。用平台自带 WebCrypto（`crypto.subtle`）计算 |
 | `meta` | 图的元数据（生成器+版本、数据来源、署名、`query` / `landed`、`chain` 层级链、实际 `span`）；同一份 JSON 内嵌在 SVG 开头的 `<metadata>` 里 |
-| `perf` | `{ cacheHits, cacheMisses }`：这张图出图过程中命中 / 未命中缓存的键（`"index"` 与各 `<adcode>`） |
+| `perf` | `{ cacheHits, cacheMisses }`：这张图出图过程中命中 / 未命中缓存的键（`"index"` 与各 `<adcode>`）。索引走内置那份时两张列表都不记（它不打接口），所以 `cacheMisses.length` 就是本轮真实请求数 |
 | `blocks` / `outline` | 区块数 / 是否带整体轮廓 |
 | `neighbors` | 画出的外部轮廓区块数（`outside` 启用且视图内有同级相邻区域时 > 0） |
 | `notes` | `{ level, text }[]`：`level` 为 `"info"`（过程说明）或 `"warn"`（限流重试、越界夹紧、匹配截断、预算用尽…） |
@@ -240,17 +243,18 @@ amap-box-review 杭州市 上海市 朝阳区    # 指定目标（同名多结�
 
 库本身不碰 IO —— 所有缓存读写都走你注入的 `cache`。约定两类键：
 
-- `"index"`：全国行政区划索引（国家 → 省 → 地 → 县 整棵树，约 4065 个节点，带 `center`、不含边界），
-  首次运行一次请求拿到。
+- `"index"`：全国行政区划索引（国家 → 省 → 地 → 县 整棵树，约 4065 个节点，带 `center`、不含边界）。
+  **可以一直不给** —— 缓存里没有就用随包内置那份（发版时冻结）：首次运行零请求。只有 `refresh` 才去线上拉一次并写入，
+  想跟最新区划就定期带 `refresh` 跑一次。
 - `<adcode>`：单个行政区自身的边界（`subdistrict=0`）。
 
-CLI 把键映射成 `<cache>/<adcode>.json` 与 `<cache>/index.json`。
+CLI 把键映射成 `<cache>/<adcode>.json` 与 `<cache>/index.json`（后者只在 `--refresh` 后出现）。
 
 各文件体量（JSON，实测**约**数，只作量级参考）：
 
 | 键 | 约 | 说明 |
 |---|---|---|
-| `index` | **0.5 MB** | 全国索引，一次请求，始终存在 |
+| `index` | **0.5 MB** | 全国索引；只在 `--refresh` 后落盘，其余时候用内置那份、不占目录 |
 | `100000` | **3.4 MB** | 国家级边界，单个最大（原始 2302 个环） |
 | 省级 `<xx0000>` | 0.3 – 1.0 MB | 如 北京市 0.32 MB、浙江省 0.71 MB、内蒙古 1.0 MB |
 | 地级 `<xxyy00>` | 0.05 – 0.3 MB | 如 杭州市 0.13 MB |
@@ -265,19 +269,19 @@ CLI 把键映射成 `<cache>/<adcode>.json` 与 `<cache>/index.json`。
 
 ## 资源画像（请求数 / wall time / CPU / 单值上限）
 
-- **请求数 = 1（全国索引，仅首次）+ 本轮新增边界数**；等于 `perf.cacheMisses.length`（限流重试会额外计次，不计入）。
-  缓存全命中时 0 请求。
-- **常见 span → 请求数**（冷缓存实测，Bun 1.3 / Node 24；等于 `ls <cache> | wc -l`）：
+- **请求数 = 本轮新增边界数**（索引随包内置，不算请求；`refresh` 时 +1）；等于 `perf.cacheMisses.length`
+  （限流重试会额外计次，不计入）。缓存全命中时 0 请求。
+- **常见 span → 请求数**（冷缓存实测，Bun 1.3；等于 `ls <cache> | wc -l`）：
 
 | 命令（冷缓存） | 请求数 | wall |
 |---|---|---|
-| `中国`（`u0d0`） | 2 | 2.4 s |
-| `中国 --down 1` | 36 | 24.3 s |
-| `浙江省 --down 1` | 13 | 7.0 s |
-| `杭州市 --up 1 --down 1` | 26 | 13.3 s |
-| `杭州市 --up 1 --down 1 --outside` | 31* | 16.6 s |
-| `杭州市 --up 1 --down 0 --ratio 1 --outside-same-level` | 34* | 18.6 s |
-| 上面那条（热缓存） | 0 | 0.5 s |
+| `中国`（`u0d0`） | 1 | 1.7 s |
+| `中国 --down 1` | 35 | 25.2 s |
+| `浙江省 --down 1` | 12 | 6.5 s |
+| `杭州市 --up 1 --down 1` | 25 | 12.8 s |
+| `杭州市 --up 1 --down 1 --outside` | 30* | 15.5 s |
+| `杭州市 --up 1 --down 0 --ratio 1 --outside-same-level` | 33* | 18.1 s |
+| 上面那条（热缓存） | 0 | 0.4 s |
 
   \* 含内置 bbox 预筛（见「数据来源与已知限制」）：`--outside` 由同级 33 省筛到 5 个；
   `--outside-same-level` 在 0.2.0 下同一命令为 **96** 请求 / 54.0 s / CPU 3.0 s（Node 24）。
@@ -300,11 +304,11 @@ CLI 把键映射成 `<cache>/<adcode>.json` 与 `<cache>/index.json`。
 - **直辖市是三级**：真实树是 `北京市 → 北京城区(110100) → 各区`，所以北京的区目标 `d=3`。
 - **`--down` 最多 1**：再往下是几千个区块、几千次请求（接口有 QPS 限制），不现实。
 - **必须抽稀**：国家级边界原始 3.4 MB / 2302 个环；道格拉斯-普克抽稀（0.75px）与丢弃小于 2px² 的环是必需的，不是优化。
-- **`outside` 候选先按内置 bbox 预筛**：现在随包内置一张**省 / 地级 bbox 表**（`src/data/bbox.ts`，424 项），
-  在拉边界**之前**就按包围盒把明显不在视图内的候选剔掉 —— 表里没有的 adcode（县级候选、新设行政区）不预筛，
-  退化为全拉，保守。于是最外层同级（省级 33 个里视图内通常仅 5 个）与目标同级都大幅省请求。
-  表由 `bun run bbox` 生成（约 280 次接口调用），**随包发布、与 `refresh` 无关**，行政区划变动后需重新生成。
-  实测 `--up 1 --down 0 --ratio 1 --outside-same-level`（杭州）96 → **34** 请求。
+- **`outside` 候选先按内置 bbox 预筛**：随包内置一张**省 / 地级 bbox 表**（`src/data/regions.ts` 里的 `BBOX`，424 项，
+  与内置索引同一个生成器、同一次遍历，不会互相漂移），在拉边界**之前**就按包围盒把明显不在视图内的候选剔掉 ——
+  表里没有的 adcode（县级候选、新设行政区）不预筛，退化为全拉，保守。于是最外层同级（省级 33 个里视图内通常仅 5 个）
+  与目标同级都大幅省请求。表由 `bun run data` 生成（约 424 次接口调用），**随包发布、与 `refresh` 无关**，
+  行政区划变动后需重新生成。实测 `--up 1 --down 0 --ratio 1 --outside-same-level`（杭州）96 → **34** 请求。
 - 请求数 / wall time / CPU 的量化见「资源画像」。
 - 覆盖范围与字段以高德接口为准。
 
@@ -315,7 +319,7 @@ bun install
 bun run build      # tsdown -> dist/（ESM .mjs + CJS .cjs + .d.ts）
 bun run test       # vitest
 bun run typecheck  # tsc --noEmit
-bun run bbox       # 重建内置省/地级 bbox 表（src/data/bbox.ts；--check 校验）
+bun run data       # 重建内置索引 + bbox 表（src/data/regions.ts；--check 校验）
 bun run gen --help # 等价 bun src/cli/gen_svg.ts --help
 ```
 

@@ -63,7 +63,8 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
     同一份对象会 `JSON.stringify` 后内嵌进 SVG 开头的 `<metadata>` 元素（XML 转义），让 SVG 自带出处；**不含时间戳**，
     保证同一参数出图逐字节一致（review 页按哈希找等价组合依赖这点）。
   - `perf`：`{ cacheHits, cacheMisses }` —— 这张图出图过程中命中/未命中缓存的键（`"index"` 与各 `<adcode>`，去重按首次访问顺序）。
-    只记真的读了注入缓存的调用；`refresh` 一律记未命中；索引已在本实例内存里复用时两张列表都不出现。
+    只记真的读了注入缓存并据此取数的调用；`refresh` 一律记未命中；索引已在本实例内存里复用、或改用内置那份（不打接口）时，
+    两张列表都不出现 —— 所以 `cacheMisses.length` 就是本轮真实请求数。
     解析层（索引）那次统计并进第一张图，与 `notes` 的处理一致。
   - 找不到匹配 → `throw`；某一张画不出来 → 该项 `svg: null` + `notes` 说明，不中断其余。
   - `maxFetches`（非负整数）/ `signal`（`AbortSignal`）：本轮取数预算与取消。一次逻辑取数记 1（限流重试不计），跑满即正常返回、未跑完的图 `svg: null` + warn；已中止抛 `AbortError`。缓存即进度记录，中断/超时后重入复用已拉边界。
@@ -103,19 +104,21 @@ bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outsid
 
 CLI 的磁盘缓存把键映射成 `<cache>/<key>.json`（键 `index` 与 `<adcode>`），与库内缓存布局一致。
 
-## 全国索引（首次运行生成，之后查找只查它）
+## 全国索引（随包内置，之后查找只查它）
 
-**首次运行时生成一份全国完整行政区划的元数据（不含边界，所以一个 API 调用就能完成），
-后续查找只从这份索引里查，除非明确要求刷新。**
+**一份全国完整行政区划的元数据（不含边界）随包发布，版本冻结在发版那一刻；后续查找只从这份索引里查。**
 
-- 那一次请求就是 `keywords=100000&subdistrict=3&extensions=base` —— 国家 → 省 → 地 → 县 整棵树
-  （约 4065 个节点 / 490 KB，带 `center`、不带 `polyline`），缓存到 `<cache>/index.json`。
+- 它来自一次 `keywords=100000&subdistrict=3&extensions=base` —— 国家 → 省 → 地 → 县 整棵树
+  （4065 个节点，带 `center`、不带 `polyline`）。生成物是 `src/data/regions.ts`（`bun run data`，见下），
+  紧凑行 `[adcode, 名称, 级别码, 经度, 纬度, 下级?]`，加载时解码成 `AmapDistrict` 树（`src/regions.ts`）。
+- **优先级**：注入缓存里的 `index` → 内置那份；`refresh` 才跳过两者去线上拉，拉到后写进 `<cache>/index.json`。
+  内置兜底**不写缓存**（否则升级后仍读旧数据），也不记进 `perf`（它不打接口）。
 - 名称匹配、adcode 解析、以及往上/往下的层级链（`buildChain` → `fetchTree`）全部只读索引，
   不再逐级请求：原来一张图要 4~5 次请求，现在 0 次。
 - 匹配规则：纯数字按 adcode 精确；否则先精确同名、再子串匹配（真正连续的片段，如 `浙江` → `浙江省`；
   `中国` 这种不连续缩写靠回落在线查询）；与 AMap 一样最多取 20 个（`安` 这类会打印“只取前 20 个”）。
 - 索引只到县级，所以查不到的名字（乡镇/街道级）才回落在线查询 —— `bun src/cli/gen_svg.ts 千岛湖镇` 仍然可用。
-  `--refresh` 会把索引一起重建。
+- 索引冻结的代价：新设 / 撤并 / 改名的行政区要等下次发版（或 `--refresh` 拉一次线上）。
 - 省直辖/兵团（东莞、济源、仙桃……）的下级街镇与上级**同 adcode**，索引扁平化时保留上层那个。
 
 ## 层级模型
@@ -231,8 +234,8 @@ bun src/cli/review.ts   # -> review/ 40 张 + review.html，浏览器打开逐�
 另两条针对本次改动：
 
 ```bash
-bun run bbox --check    # 用 districts/ 缓存的边界逐项复算内置 bbox 表，全绿
-bun run bbox            # 重建表（约 280 次接口；行政区划变动后重跑）
+bun run data --check    # 用 districts/ 缓存的数据逐项复算内置索引与 bbox 表，全绿
+bun run data            # 重建生成物（索引 1 次请求 + 约 424 次边界；行政区划变动后重跑）
 ```
 
 **预筛不改变出图**：`outside` / `outsideSameLevel` 的候选预筛只该省掉「本来就不会画」的候选，所以同一份缓存下
@@ -279,17 +282,17 @@ bun src/cli/review.ts --out review --html review.html --cache districts --refres
 - **直辖市是三级**：AMap 的真实树是 `北京市 → 北京城区(110100) → 各区`，所以北京的区目标 `d=3`，`--up max` 会带出 `北京城区` 这一级。
 - **目标可能对不上自身节点**：个别行政区（如 `711113 西湖乡`）在层级树里匹配不到，会退到实际落到的那个行政区（`花莲县`）并打印提示。
 - **`--down` 最多 1**：再往下是几千个区块、几千次请求（接口 QPS 有限，超了返回 `CUQPS_HAS_EXCEEDED_THE_LIMIT`），不现实。
-- **`outside` 候选先按内置 bbox 预筛**：随包内置一张省/地级 bbox 表（`src/data/bbox.ts`，`bun run bbox` 生成、随包发布、
-  与 `refresh` 无关），在拉边界前先按包围盒剔掉明显在视图外的候选；表里没有的 adcode（县级候选、新设候选）不预筛，
-  退化为全拉，保守。实测 `--up 1 --down 0 --ratio 1 --outside-same-level`（杭州）96 → 34 请求。
+- **`outside` 候选先按内置 bbox 预筛**：随包内置一张省/地级 bbox 表（`src/data/regions.ts` 的 `BBOX`，`bun run data` 生成、
+  与内置索引同一次遍历、随包发布、与 `refresh` 无关），在拉边界前先按包围盒剔掉明显在视图外的候选；表里没有的
+  adcode（县级候选、新设候选）不预筛，退化为全拉，保守。实测 `--up 1 --down 0 --ratio 1 --outside-same-level`（杭州）96 → 34 请求。
 - **必须抽稀**：国家级边界原始 3.4MB / 2302 个环，34 个省级合计约 15MB。`simplify()`（道格拉斯-普克，0.75px）+ 丢弃小于 2px² 的环是必需的，不是优化。
-- **缓存**：`districts/index.json`（全国索引，首次运行一次请求拿到，见上）+ `districts/<adcode>.json`
-  （该区块自身边界，`subdistrict=0`）。`-tree.json` 已废弃 —— 层级链改由索引回答。
+- **缓存**：`districts/<adcode>.json`（该区块自身边界，`subdistrict=0`）+ `districts/index.json`
+  （**仅 `--refresh` 后才有**；其余时候用内置索引，见上）。`-tree.json` 已废弃 —— 层级链改由索引回答。
   首次全新目标只需拉目标那几级的边界，`--refresh` 强制重取。
-  体量量级（实测约数）：索引 **0.5MB**、国家级边界 **3.4MB**（单个最大）、省级 0.3–1.0MB、地级 0.05–0.3MB、
+  体量量级（实测约数）：索引 **0.5MB**（仅 `--refresh` 后落盘）、国家级边界 **3.4MB**（单个最大）、省级 0.3–1.0MB、地级 0.05–0.3MB、
   县级 0.01–0.15MB（中位 ~0.07MB）。整轮累计：`杭州 u0d0` ≈0.6MB、`杭州 u0d1` ≈1MB、`浙江 u0d1` ≈2.5MB、
   `中国 u0d1`（国家+34省）≈**20MB**；跑完基准四目标 + 审阅页后 `districts/` 实测约 **41MB**（260 个文件，
-  另有废弃的 `-tree.json` ~4MB，可随时删）。
+  含 `--refresh` 才会出现的 `index.json`；另有废弃的 `-tree.json` ~4MB，可随时删）。
 
 ## 代码结构
 
@@ -299,10 +302,11 @@ bun src/cli/review.ts --out review --html review.html --cache districts --refres
 | `src/amap-box.ts` | `AmapBox` 类：API 取数（`apiQuery` + 限流退避）、缓存读写、全国索引、`resolve` / `generate`；`svgFileName` |
 | `src/geometry.ts` | 纯几何：`parsePolyline` / `toUnit` / `signedArea` / `centroid` / `pointInRing` / `simplify` |
 | `src/bbox.ts` | `bboxOf` / `bboxHit` + `builtinBBox`（查内置表，缺失返回 null） |
-| `src/data/bbox.ts` | 内置省/地级经纬度包围盒表（`bun run bbox` 生成，勿手改） |
+| `src/data/regions.ts` | 内置全国索引 + 省/地级 bbox 表（`bun run data` 生成，勿手改） |
+| `src/regions.ts` | 把内置索引的紧凑行解码成 `AmapDistrict` 树（惰性一次，实例间共用） |
 | `src/render.ts` | `renderMap`（投影 → 抽稀 → 分层线宽 → 同级统一字号 → 版式/画幅 → 拼 SVG）与 `wrapSvg`、`parseRatio`、`mapFrame` / `canvasViewBox`（画框推导，渲染与候选预筛共用） |
 | `src/index.ts` | 公共导出入口 |
-| `scripts/gen-bbox.ts` | 生成 `src/data/bbox.ts`（dev 专用，不发布；`--check` 校验） |
+| `scripts/gen-data.ts` | 生成 `src/data/regions.ts`（dev 专用，不发布；`--check` 校验） |
 | `src/cli/common.ts` | CLI 共用：`loadKey` / `renderNameTemplate` / `diskCache` / `nodeFetch` |
 | `src/cli/gen_svg.ts` | 出图 CLI（解析跨度参数、写文件） |
 | `src/cli/review.ts` | 审阅页 CLI（`gen` → 写 `<out>` → 拼页面） |
@@ -310,6 +314,6 @@ bun src/cli/review.ts --out review --html review.html --cache districts --refres
 | `tests/*.test.ts` | vitest：几何、渲染、`AmapBox`（假 fetch + 内存缓存） |
 
 `AmapBox` 内部方法（原 CLI 里的同名函数）：`apiQuery`（单次请求 + 限流退避重试，非限流错误立即返回）、
-`fetchRegion`（带缓存的区块边界 —— 唯一还会打接口的取数路径）、`ensureIndex`（读/重建全国索引并扁平化成
-`byAdcode` / `allNodes`）、`searchIndex`（索引内名称/adcode 匹配，上限 20）、`fetchTree`、`buildChain`
+`fetchRegion`（带缓存的区块边界 —— 唯一还会打接口的取数路径）、`ensureIndex`（缓存 → 内置兜底 → `refresh` 走线上，
+再扁平化成 `byAdcode` / `allNodes`）、`searchIndex`（索引内名称/adcode 匹配，上限 20）、`fetchTree`、`buildChain`
 （顺索引树从 `100000` 逐级下降）、`onPath`（adcode 去尾零当前缀），以及每个命中一张的 `renderOne`。

@@ -35,9 +35,9 @@ const USAGE = `用法: amap-box <行政区名|adcode> [选项]
   --max-fetches <N>  本轮最多新增几次取数（缓存未命中才计；跑满即停，未跑完的图不写）
   --key <KEY>    高德 key（优先于 AMAP_KEY 与 .env）
   --name <template>  文件名模板：{name} / {adcode} / {up} / {down}（未以 .svg 结尾自动补；多命中同名会互相覆盖）
-  --refresh      忽略缓存，重新拉取（含重建全国索引）
+  --refresh      忽略缓存，重新拉取（含从线上重建全国索引）
 层级: 国家级(0) -> 省级(1) -> 地级(2) -> 县级(3)
-索引: <cache>/index.json 首次运行一次请求生成，之后查找/层级只走它`;
+索引: 随包内置（发版时冻结），首次运行零请求，只查它；--refresh 才从线上拉最新，并缓存到 <cache>/index.json`;
 
 async function main() {
   const flags: {

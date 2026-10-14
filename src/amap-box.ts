@@ -16,6 +16,7 @@ import type {
 } from "./types.js";
 import { toUnit, type Unit } from "./geometry.js";
 import { bboxHit, bboxOf, builtinBBox } from "./bbox.js";
+import { bundledIndexRoot } from "./regions.js";
 import { canvasViewBox, mapFrame, PAD, parseCenter, parseRatio, renderMap, wrapSvg, type RenderUnit } from "./render.js";
 import pkg from "../package.json";
 
@@ -202,12 +203,25 @@ export class AmapBox {
   }
 
   // ------------------------------------------------------------- index
-  // 全国行政区划索引：一次请求拿到 国家->省->地->县 整棵树（extensions=base，不含边界）。
-  // 之后所有名称/adcode 查找与层级链都只认它；只有索引缺失或 refresh 才重建。
+  // 全国行政区划索引：国家->省->地->县 整棵树（不含边界），随包内置一份（`src/data/regions.ts`，发版时冻结）。
+  // 之后所有名称/adcode 查找与层级链都只认它；缓存里有就用缓存，没有就用内置，只有 refresh 才打接口。
   async #loadIndex(refresh: boolean, run: Run): Promise<AmapDistrict | null> {
-    const hit = await this.#readCache("index", refresh, run.perf);
-    if (hit) return hit.districts![0];
-    run.notes.push({ level: "info", text: "首次运行：拉取全国行政区划索引（一次请求，不含边界）" });
+    // 索引已随包内置，所以「缓存里没有 index」不算一次取数（两张列表都不记）；
+    // 只有 refresh 才是真的去拉线上那份，那份要按未命中计。
+    const hit = await this.#readCache("index", refresh, refresh ? run.perf : undefined);
+    if (hit) {
+      if (!refresh) record(run.perf.cacheHits, "index");
+      return hit.districts![0];
+    }
+    if (!refresh) {
+      // 内置索引（发版时冻结）：首次运行零请求。refresh 才拉线上最新那份。
+      run.notes.push({
+        level: "info",
+        text: "使用内置全国行政区划索引（随包发布、发版时冻结；refresh 可拉取最新）",
+      });
+      return bundledIndexRoot();
+    }
+    run.notes.push({ level: "info", text: "拉取全国行政区划索引（一次请求，不含边界）" });
     const d = await this.#apiQuery({ keywords: COUNTRY, subdistrict: "3", extensions: "base" }, run);
     if (d.status !== "1" || !d.districts?.length) return null;
     await this.#writeCache("index", d);

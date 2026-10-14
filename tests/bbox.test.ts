@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { bboxHit, bboxOf, builtinBBox } from "../src/bbox.js";
-import { BBOX } from "../src/data/bbox.js";
+import { BBOX } from "../src/data/regions.js";
 import type { Unit } from "../src/geometry.js";
 
 const squareUnit = (lon: number, lat: number, s: number): Unit => ({

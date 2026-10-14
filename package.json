@@ -1,6 +1,6 @@
 {
   "name": "@kuriyona/amap-box",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "高德行政区划 → SVG 深色线稿地图（JS API + CLI）",
   "type": "module",
   "license": "MIT",
@@ -47,7 +47,7 @@
     "typecheck": "tsc --noEmit",
     "gen": "bun src/cli/gen_svg.ts",
     "review": "bun src/cli/review.ts",
-    "bbox": "bun scripts/gen-bbox.ts"
+    "data": "bun scripts/gen-data.ts"
   },
   "engines": {
     "node": ">=18"

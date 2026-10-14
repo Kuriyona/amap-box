@@ -23,6 +23,7 @@ export type AmapFetch = (url: string, signal?: AbortSignal) => unknown | Promise
 /**
  * 键值缓存。值一律是字符串（本库内部用 JSON 序列化），
  * 键形如 `"index"`（全国索引）与 `<adcode>`（单个行政区边界）。
+ * `"index"` 可以一直不给：缓存里没有时改用随包内置的索引（发版时冻结），只有 `refresh` 才去线上拉并写入。
  */
 export interface AmapCache {
   read(key: string): string | null | undefined | Promise<string | null | undefined>;
@@ -151,8 +152,9 @@ export interface MapMeta {
 }
 
 /**
- * 出图过程的缓存统计（目前只含缓存命中情况）。只记**真的读了注入缓存**的调用：
- * 索引已在本实例内存里复用（同一次 `generate` 之外的第二次调用）不算缓存访问，两张列表里都不出现。
+ * 出图过程的缓存统计（目前只含缓存命中情况）。只记**真的读了注入缓存并据此取数**的调用：
+ * 索引已在本实例内存里复用（同一次 `generate` 之外的第二次调用）不算缓存访问，两张列表里都不出现；
+ * 缓存里没有索引而改用内置那份时也不算取数（它不打接口），只有 `refresh` 走线上索引才记未命中。
  */
 export interface PerfStats {
   /** 命中缓存的键（`"index"` 与各 `<adcode>`），按首次访问顺序去重。 */

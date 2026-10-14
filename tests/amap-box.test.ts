@@ -42,8 +42,11 @@ function makeEnv(
   tree: AmapDistrict = INDEX_TREE,
   hooks: { onIndex?: () => unknown } = {},
   polys: Record<string, string> = POLY,
+  { preloadIndex = true }: { preloadIndex?: boolean } = {},
 ) {
   const store = new Map<string, string>();
+  // 默认把 fixture 索引预置进缓存：内置索引只在缓存空着时才接管（`preloadIndex: false` 专门测它）
+  if (preloadIndex) store.set("index", JSON.stringify({ status: "1", districts: [tree] }));
   const calls: string[] = [];
   let indexHits = 0;
   const fetchImpl = (raw: string) => {
@@ -177,22 +180,13 @@ describe("generate", () => {
   });
 
   it("多命中：本地提示逐张保留，解析层提示只在第一张", async () => {
-    const dup = (adcode: string): AmapDistrict => ({
-      name: "同名区",
-      adcode,
-      level: "district",
-      center: "120.5,30.5",
-      districts: [],
-    });
-    const tree = node("100000", [
-      node("330000", [node("330100", [dup("330110")]), node("330200", [dup("330211")])]),
-    ]);
-    const { box } = makeEnv(tree);
-    const res = await box.generate("同名区", { down: 1 });
-    expect(res).toHaveLength(2);
-    for (const r of res) expect(nz(r.notes)).toContain("乡镇/街道级");
-    expect(nz(res[0].notes)).toContain("首次运行");
-    expect(nz(res[1].notes)).not.toContain("首次运行");
+    // 用内置索引（缓存空）：真实「安」有 142 个命中，取前 20 —— 解析层提示只该挂在第一张
+    const { box } = makeEnv(INDEX_TREE, {}, POLY, { preloadIndex: false });
+    const res = await box.generate("安");
+    expect(res).toHaveLength(20);
+    expect(nz(res[0]!.notes)).toContain("只取前 20 个");
+    for (const r of res.slice(1)) expect(nz(r.notes)).not.toContain("只取前 20 个");
+    for (const r of res) expect(nz(r.notes)).toContain("没有边界数据"); // 本地提示逐张保留
   });
 
   it("拓展外部轮廓：画视图内的同级相邻区域（不往下细分、不加标签）", async () => {
@@ -315,9 +309,9 @@ describe("generate", () => {
     // 结果里的 meta 就是 SVG 里那份（JSON 序列化）
     const embedded = /<metadata>(.*)<\/metadata>/s.exec(first.svg!)![1]!;
     expect(JSON.parse(embedded)).toEqual(first.meta);
-    // 首次：索引与目标边界都没缓存 -> 未命中
-    expect(first.perf.cacheMisses).toEqual(["index", "330100"]);
-    expect(first.perf.cacheHits).toEqual([]);
+    // 首次：索引命中缓存，目标边界未命中
+    expect(first.perf.cacheHits).toEqual(["index"]);
+    expect(first.perf.cacheMisses).toEqual(["330100"]);
     // 二次：索引已在实例内存里（不再读缓存），只有边界走缓存命中
     const [second] = await box.generate("杭州市");
     expect(second.perf.cacheHits).toEqual(["330100"]);
@@ -384,12 +378,38 @@ describe("缓存", () => {
   it("refresh 绕开缓存重建索引", async () => {
     const { box, calls, indexHits } = makeEnv();
     await box.generate("杭州市");
-    expect(indexHits()).toBe(1);
+    expect(indexHits()).toBe(0); // 预置的索引直接命中缓存，没打接口
     const [r] = await box.generate("杭州市", { refresh: true });
-    expect(indexHits()).toBe(2);
+    expect(indexHits()).toBe(1); // refresh 才走线上索引
     expect(calls.length).toBeGreaterThan(1);
     expect(r.perf.cacheHits).toEqual([]); // 强制绕过缓存 -> 全部算未命中
     expect(r.perf.cacheMisses).toEqual(["index", "330100"]);
+  });
+});
+
+describe("内置索引", () => {
+  it("缓存空着时改用内置索引：解析零请求，也不写进用户缓存", async () => {
+    const { box, calls, indexHits, store } = makeEnv(INDEX_TREE, {}, POLY, { preloadIndex: false });
+    const r = await box.resolve("杭州市");
+    expect(r.regions.map((x) => x.adcode)).toEqual(["330100"]); // 内置索引里的真实节点
+    expect(indexHits()).toBe(0);
+    expect(calls).toEqual([]); // 解析层一次请求都不发
+    expect(store.has("index")).toBe(false); // 内置索引不落缓存，升级即时生效
+  });
+
+  it("内置索引不占取数统计：只有边界算未命中", async () => {
+    const { box } = makeEnv(INDEX_TREE, {}, POLY, { preloadIndex: false });
+    const [r] = await box.generate("杭州市");
+    expect(r.perf.cacheHits).toEqual([]);
+    expect(r.perf.cacheMisses).toEqual(["330100"]); // 索引来自内置 -> 两张列表都不记
+  });
+
+  it("refresh 拉线上那份并覆盖内置（写进缓存）", async () => {
+    const { box, indexHits, store } = makeEnv(INDEX_TREE, {}, POLY, { preloadIndex: false });
+    const r = await box.resolve("杭州市", true);
+    expect(indexHits()).toBe(1);
+    expect(r.regions.map((x) => x.adcode)).toEqual(["330100"]);
+    expect(store.has("index")).toBe(true);
   });
 });
 
@@ -403,7 +423,7 @@ describe("限流", () => {
         return { status: "0", info: "CUQPS_HAS_EXCEEDED_THE_LIMIT" };
       },
     });
-    const [r] = await box.generate("杭州市");
+    const [r] = await box.generate("杭州市", { refresh: true });
     expect(r.svg).toBeTruthy();
     expect(nz(r.notes)).toContain("限流重试");
   });
@@ -416,7 +436,7 @@ describe("限流", () => {
         return { status: "0", info: "INVALID_USER_KEY" };
       },
     });
-    await expect(box.ready()).rejects.toThrow(/索引/);
+    await expect(box.ready(true)).rejects.toThrow(/索引/);
     expect(n).toBe(1);
   });
 });
@@ -431,11 +451,11 @@ describe("notes 分级", () => {
         return { status: "0", info: "CUQPS_HAS_EXCEEDED_THE_LIMIT" };
       },
     });
-    const [r] = await box.generate("杭州市", { up: 9, down: 0, outside: true });
+    const [r] = await box.generate("杭州市", { up: 9, down: 0, outside: true, refresh: true });
     const level = (s: string) => r.notes.find((n) => n.text.includes(s))?.level;
     expect(level("限流重试")).toBe("warn");
     expect(level("超出范围")).toBe("warn");
-    expect(level("首次运行")).toBe("info");
+    expect(level("拉取全国行政区划索引")).toBe("info");
     expect(level("拓展外部轮廓")).toBe("info");
   });
 });
@@ -464,23 +484,28 @@ describe("候选预筛", () => {
 });
 
 describe("取数预算 maxFetches", () => {
-  it("跑满即停：未跑完的图为 null + warn，边界请求数为 0；缓存即进度", async () => {
+  it("跑满即停：未跑完的图为 null + warn；已拉的边界留在缓存里，重跑接着来", async () => {
     const { box, calls } = makeEnv();
     const [r1] = await box.generate("杭州市", { down: 1, maxFetches: 1 });
     expect(r1.svg).toBeNull();
     expect(r1.hash).toBeNull();
     const warn = r1.notes.find((n) => n.text.includes("预算用尽"));
     expect(warn?.level).toBe("warn");
-    expect(calls.filter((u) => u.includes("subdistrict=0")).length).toBe(0);
+    expect(calls.filter((u) => u.includes("subdistrict=0")).length).toBe(1); // 只来得及拉一个下级
 
     const [r2] = await box.generate("杭州市", { down: 1, maxFetches: 3 });
     expect(r2.svg).toBeTruthy();
-    expect(r2.perf.cacheMisses).toEqual(["330110", "329111", "330100"]);
+    expect(r2.perf.cacheHits).toEqual(["330110"]); // 上一轮拉的接着用
+    expect(r2.perf.cacheMisses).toEqual(["329111", "330100"]);
   });
 
-  it("maxFetches: 0（冷缓存）连索引都拿不到 -> 抛预算错误", async () => {
-    const { box } = makeEnv();
-    await expect(box.generate("杭州市", { maxFetches: 0 })).rejects.toThrow(/预算/);
+  it("maxFetches: 0：内置索引不花预算，但一张图也拉不到边界 -> svg null + warn（不抛）", async () => {
+    const { box, calls } = makeEnv(INDEX_TREE, {}, POLY, { preloadIndex: false });
+    const [r] = await box.generate("杭州市", { maxFetches: 0 });
+    expect(r.svg).toBeNull();
+    expect(nz(r.notes)).toContain("使用内置全国行政区划索引");
+    expect(nz(r.notes)).toContain("预算用尽");
+    expect(calls).toEqual([]); // 一次请求都不发
     await expect(box.generate("杭州市", { maxFetches: -1 })).rejects.toThrow(/maxFetches/);
     await expect(box.generate("杭州市", { maxFetches: 1.5 })).rejects.toThrow(/maxFetches/);
   });
@@ -503,7 +528,7 @@ describe("signal", () => {
         return null;
       },
     });
-    await expect(box.generate("杭州市", { signal: ac.signal })).rejects.toThrow(/abort/i);
+    await expect(box.generate("杭州市", { signal: ac.signal, refresh: true })).rejects.toThrow(/abort/i);
     expect(calls.filter((u) => u.includes("subdistrict=0")).length).toBe(0);
   });
 });

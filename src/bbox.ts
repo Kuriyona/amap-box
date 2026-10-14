@@ -1,5 +1,5 @@
 /** 经纬度包围盒工具 + 内置省 / 地级 bbox 表查找。 */
-import { BBOX } from "./data/bbox.js";
+import { BBOX } from "./data/regions.js";
 import type { Unit } from "./geometry.js";
 
 /** 经纬度包围盒。 */
