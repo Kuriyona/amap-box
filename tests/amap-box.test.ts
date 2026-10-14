@@ -1,6 +1,7 @@
+import { createHash } from "node:crypto";
 import { describe, expect, it } from "vitest";
 import { AmapBox } from "../src/index.js";
-import type { AmapCache, AmapDistrict } from "../src/types.js";
+import type { AmapCache, AmapDistrict, Note } from "../src/types.js";
 
 // ---------------------------------------------------------------- fixture
 const NAMES: Record<string, { name: string; level: string }> = {
@@ -8,11 +9,13 @@ const NAMES: Record<string, { name: string; level: string }> = {
   "330000": { name: "浙江省", level: "province" },
   "330100": { name: "杭州市", level: "city" },
   "330110": { name: "临安区", level: "district" },
-  "330111": { name: "富阳区", level: "district" },
+  "329111": { name: "富阳区", level: "district" },
   "330200": { name: "宁波市", level: "city" },
   "330211": { name: "同名区", level: "district" },
-  "320000": { name: "江苏省", level: "province" },
-  "320100": { name: "南京市", level: "city" },
+  "329000": { name: "江苏省", level: "province" },
+  "329100": { name: "南京市", level: "city" },
+  "110000": { name: "北京市", level: "province" },
+  "330900": { name: "虚构市", level: "city" },
 };
 
 const POLY: Record<string, string> = {
@@ -20,7 +23,7 @@ const POLY: Record<string, string> = {
   "330000": "119,29;122,29;122,32;119,32",
   "330100": "119.5,29.5;121.5,29.5;121.5,31.5;119.5,31.5",
   "330110": "119.6,29.6;120.4,29.6;120.4,30.4;119.6,30.4",
-  "330111": "120.6,29.6;121.4,29.6;121.4,30.4;120.6,30.4",
+  "329111": "120.6,29.6;121.4,29.6;121.4,30.4;120.6,30.4",
   "330211": "120.6,29.6;121.4,29.6;121.4,30.4;120.6,30.4",
 };
 
@@ -32,7 +35,7 @@ const node = (adcode: string, districts?: AmapDistrict[]): AmapDistrict => ({
 });
 
 const INDEX_TREE = node("100000", [
-  node("330000", [node("330100", [node("330110", []), node("330111", [])])]),
+  node("330000", [node("330100", [node("330110", []), node("329111", [])])]),
 ]);
 
 function makeEnv(
@@ -69,6 +72,8 @@ function makeEnv(
 }
 
 const countPaths = (svg: string) => (svg.match(/<path /g) ?? []).length;
+/** 提示文本拼一段，便于 `toContain` 断言（不关心 level）。 */
+const nz = (notes: Note[]) => notes.map((n) => n.text).join("\n");
 
 // ---------------------------------------------------------------- tests
 describe("构造", () => {
@@ -107,7 +112,7 @@ describe("resolve", () => {
     const { box } = makeEnv(many);
     const { regions, notes } = await box.resolve("测试镇");
     expect(regions).toHaveLength(20);
-    expect(notes.join("\n")).toContain("只取前 20 个");
+    expect(nz(notes)).toContain("只取前 20 个");
   });
 });
 
@@ -146,13 +151,13 @@ describe("generate", () => {
     const [r] = await box.generate("330110", { up: 9, down: 0 });
     expect(r.up).toBe(3);
     expect(r.file).toBe("临安区-330110-u3d0.svg");
-    expect(r.notes.join("\n")).toContain("超出范围");
+    expect(nz(r.notes)).toContain("超出范围");
   });
 
   it("县级目标 down1：下级是乡镇/街道，记提示并退化为只画自身", async () => {
     const { box } = makeEnv();
     const [r] = await box.generate("330110", { down: 1 });
-    expect(r.notes.join("\n")).toContain("乡镇/街道级");
+    expect(nz(r.notes)).toContain("乡镇/街道级");
     expect(r.blocks).toBe(1); // 无下级可画 -> 只画自身
     expect(r.outline).toBe(false);
   });
@@ -185,16 +190,16 @@ describe("generate", () => {
     const { box } = makeEnv(tree);
     const res = await box.generate("同名区", { down: 1 });
     expect(res).toHaveLength(2);
-    for (const r of res) expect(r.notes.join("\n")).toContain("乡镇/街道级");
-    expect(res[0].notes.join("\n")).toContain("首次运行");
-    expect(res[1].notes.join("\n")).not.toContain("首次运行");
+    for (const r of res) expect(nz(r.notes)).toContain("乡镇/街道级");
+    expect(nz(res[0].notes)).toContain("首次运行");
+    expect(nz(res[1].notes)).not.toContain("首次运行");
   });
 
   it("拓展外部轮廓：画视图内的同级相邻区域（不往下细分、不加标签）", async () => {
     const { box } = makeEnv(INDEX_TREE, {}, {
       ...POLY,
       // 富阳区与临安区在视图内有交叠
-      "330111": "119.8,29.8;120.6,29.8;120.6,30.6;119.8,30.6",
+      "329111": "119.8,29.8;120.6,29.8;120.6,30.6;119.8,30.6",
     });
     const [r] = await box.generate("330110", { up: 0, down: 0, outside: true });
     expect(r.landed.adcode).toBe("330110");
@@ -202,7 +207,7 @@ describe("generate", () => {
     expect(r.neighbors).toBe(1); // 富阳区
     expect(countPaths(r.svg!)).toBe(2); // 临安区 + 富阳区
     expect((r.svg!.match(/text-anchor="middle"/g) ?? []).length).toBe(1); // 外部轮廓不加标签
-    expect(r.notes.join("\n")).toContain("同级候选 1 个，视图内绘出 1 个");
+    expect(nz(r.notes)).toContain("同级候选 1 个（按内置 bbox 预筛掉 0 个），视图内绘出 1 个");
   });
 
   it("拓展外部轮廓：视图外的同级相邻区域不画", async () => {
@@ -212,46 +217,46 @@ describe("generate", () => {
     const [on] = await box.generate("330110", { up: 0, down: 0, outside: true });
     expect(on.neighbors).toBe(0);
     expect(countPaths(on.svg!)).toBe(1);
-    expect(on.notes.join("\n")).toContain("同级候选 1 个，视图内绘出 0 个");
+    expect(nz(on.notes)).toContain("同级候选 1 个（按内置 bbox 预筛掉 0 个），视图内绘出 0 个");
   });
 
   it("拓展外部轮廓：最外层级即目标自身时无更上层同级", async () => {
     const { box } = makeEnv();
     const [r] = await box.generate("100000", { up: 0, down: 1, outside: true });
     expect(r.neighbors).toBe(0);
-    expect(r.notes.join("\n")).toContain("没有更上层的同级相邻区域");
+    expect(nz(r.notes)).toContain("没有更上层的同级相邻区域");
   });
 
   it("目标同级外部轮廓：up=1 时画出相邻「上一层」下、与目标同层级且落在视图内的区域", async () => {
     const tree = node("100000", [
-      node("330000", [node("330100", [node("330110", []), node("330111", [])])]),
-      node("320000", [node("320100", [])]),
+      node("330000", [node("330100", [node("330110", []), node("329111", [])])]),
+      node("329000", [node("329100", [])]),
     ]);
     const { box } = makeEnv(tree, {}, {
       ...POLY,
-      "320000": "120.0,29.0;122.0,29.0;122.0,31.0;120.0,31.0", // 与视图（浙江省）有交叠
-      "320100": "120.2,29.2;121.8,29.2;121.8,30.8;120.2,30.8",
+      "329000": "120.0,29.0;122.0,29.0;122.0,31.0;120.0,31.0", // 与视图（浙江省）有交叠
+      "329100": "120.2,29.2;121.8,29.2;121.8,30.8;120.2,30.8",
     });
     // 仅给 outsideSameLevel（隐含 outside）：最外层同级 = 江苏省；目标同级 = 江苏省的下级 南京市
     const [r] = await box.generate("杭州市", { up: 1, down: 0, outsideSameLevel: true });
     expect(r.blocks).toBe(1); // 只画 浙江省的地级市（含杭州市）
     expect(r.neighbors).toBe(2); // 江苏省 + 南京市
-    expect(r.notes.join("\n")).toContain("目标同级外部轮廓：候选 1 个，视图内绘出 1 个");
+    expect(nz(r.notes)).toContain("目标同级外部轮廓：候选 1 个（按内置 bbox 预筛掉 0 个），视图内绘出 1 个");
   });
 
   it("目标同级外部轮廓：视图外的「上一层」不下探", async () => {
     const tree = node("100000", [
       node("330000", [node("330100", [])]),
-      node("320000", [node("320100", [])]),
+      node("329000", [node("329100", [])]),
     ]);
     const { box } = makeEnv(tree, {}, {
       ...POLY,
-      "320000": "100.0,20.0;101.0,20.0;101.0,21.0;100.0,21.0", // 远在视图外
-      "320100": "100.2,20.2;100.8,20.2;100.8,20.8;100.2,20.8",
+      "329000": "100.0,20.0;101.0,20.0;101.0,21.0;100.0,21.0", // 远在视图外
+      "329100": "100.2,20.2;100.8,20.2;100.8,20.8;100.2,20.8",
     });
     const [r] = await box.generate("杭州市", { up: 1, down: 0, outsideSameLevel: true });
     expect(r.neighbors).toBe(0);
-    expect(r.notes.join("\n")).toContain("目标同级外部轮廓：候选 0 个，视图内绘出 0 个");
+    expect(nz(r.notes)).toContain("目标同级外部轮廓：候选 0 个（按内置 bbox 预筛掉 0 个），视图内绘出 0 个");
   });
 
   it("目标同级外部轮廓：超出可用条件（up>=2 且目标为地级/县级）时报错", async () => {
@@ -341,7 +346,7 @@ describe("目标居中", () => {
     const [r] = await box.generate("杭州市", { up: 1, down: 0, center: 0.5 });
     expect(r.svg).toBeTruthy();
     expect(r.file).toBe("杭州市-330100-u1d0.svg");
-    expect(r.notes.join("\n")).toContain("目标同级外部轮廓"); // 占比模式默认开启
+    expect(nz(r.notes)).toContain("目标同级外部轮廓"); // 占比模式默认开启
   });
 
   it('center: "target" / "outline" / true / 数字 均可用', async () => {
@@ -363,7 +368,7 @@ describe("目标居中", () => {
     const { box } = makeEnv();
     const [r] = await box.generate("临安区", { up: 2, down: 0, center: 0.5 });
     expect(r.svg).toBeTruthy();
-    expect(r.notes.join("\n")).not.toContain("目标同级外部轮廓");
+    expect(nz(r.notes)).not.toContain("目标同级外部轮廓");
   });
 });
 
@@ -400,7 +405,7 @@ describe("限流", () => {
     });
     const [r] = await box.generate("杭州市");
     expect(r.svg).toBeTruthy();
-    expect(r.notes.join("\n")).toContain("限流重试");
+    expect(nz(r.notes)).toContain("限流重试");
   });
 
   it("不可重试错误立即返回，不空转", async () => {
@@ -413,5 +418,108 @@ describe("限流", () => {
     });
     await expect(box.ready()).rejects.toThrow(/索引/);
     expect(n).toBe(1);
+  });
+});
+
+describe("notes 分级", () => {
+  it("限流重试与 up 越界是 warn，索引构建与外部轮廓计数是 info", async () => {
+    let first = true;
+    const { box } = makeEnv(INDEX_TREE, {
+      onIndex: () => {
+        if (!first) return null;
+        first = false;
+        return { status: "0", info: "CUQPS_HAS_EXCEEDED_THE_LIMIT" };
+      },
+    });
+    const [r] = await box.generate("杭州市", { up: 9, down: 0, outside: true });
+    const level = (s: string) => r.notes.find((n) => n.text.includes(s))?.level;
+    expect(level("限流重试")).toBe("warn");
+    expect(level("超出范围")).toBe("warn");
+    expect(level("首次运行")).toBe("info");
+    expect(level("拓展外部轮廓")).toBe("info");
+  });
+});
+
+describe("候选预筛", () => {
+  it("表里有的同级候选按 bbox 预筛：视图外的省不取数", async () => {
+    const tree = node("100000", [
+      node("330000", [node("330100", [])]),
+      node("110000", []), // 北京：真实 bbox 与浙江视图不相交
+    ]);
+    const { box, calls } = makeEnv(tree);
+    const [r] = await box.generate("杭州市", { up: 1, down: 0, outside: true });
+    expect(calls.some((u) => u.includes("keywords=110000"))).toBe(false);
+    expect(nz(r.notes)).toContain("预筛掉 1 个");
+  });
+
+  it("表里没有的 adcode 保守取数（不预筛）", async () => {
+    const tree = node("100000", [
+      node("330000", [node("330100", [])]),
+      node("329000", []), // 虚构省：表里没有
+    ]);
+    const { box, calls } = makeEnv(tree);
+    await box.generate("杭州市", { up: 1, down: 0, outside: true });
+    expect(calls.some((u) => u.includes("keywords=329000"))).toBe(true);
+  });
+});
+
+describe("取数预算 maxFetches", () => {
+  it("跑满即停：未跑完的图为 null + warn，边界请求数为 0；缓存即进度", async () => {
+    const { box, calls } = makeEnv();
+    const [r1] = await box.generate("杭州市", { down: 1, maxFetches: 1 });
+    expect(r1.svg).toBeNull();
+    expect(r1.hash).toBeNull();
+    const warn = r1.notes.find((n) => n.text.includes("预算用尽"));
+    expect(warn?.level).toBe("warn");
+    expect(calls.filter((u) => u.includes("subdistrict=0")).length).toBe(0);
+
+    const [r2] = await box.generate("杭州市", { down: 1, maxFetches: 3 });
+    expect(r2.svg).toBeTruthy();
+    expect(r2.perf.cacheMisses).toEqual(["330110", "329111", "330100"]);
+  });
+
+  it("maxFetches: 0（冷缓存）连索引都拿不到 -> 抛预算错误", async () => {
+    const { box } = makeEnv();
+    await expect(box.generate("杭州市", { maxFetches: 0 })).rejects.toThrow(/预算/);
+    await expect(box.generate("杭州市", { maxFetches: -1 })).rejects.toThrow(/maxFetches/);
+    await expect(box.generate("杭州市", { maxFetches: 1.5 })).rejects.toThrow(/maxFetches/);
+  });
+});
+
+describe("signal", () => {
+  it("已中止的信号：抛 AbortError 且一次请求都不发", async () => {
+    const { box, calls } = makeEnv();
+    const ac = new AbortController();
+    ac.abort();
+    await expect(box.generate("杭州市", { signal: ac.signal })).rejects.toThrow(/abort/i);
+    expect(calls.length).toBe(0);
+  });
+
+  it("中途中止（索引返回后）：不再发边界请求", async () => {
+    const ac = new AbortController();
+    const { box, calls } = makeEnv(INDEX_TREE, {
+      onIndex: () => {
+        ac.abort();
+        return null;
+      },
+    });
+    await expect(box.generate("杭州市", { signal: ac.signal })).rejects.toThrow(/abort/i);
+    expect(calls.filter((u) => u.includes("subdistrict=0")).length).toBe(0);
+  });
+});
+
+describe("hash", () => {
+  it("= svg 的 sha256；两次同参一致；svg 为 null 时为 null", async () => {
+    const { box } = makeEnv();
+    const [r] = await box.generate("杭州市");
+    expect(r.hash).toBe(createHash("sha256").update(r.svg!).digest("hex"));
+    const [r2] = await box.generate("杭州市");
+    expect(r2.hash).toBe(r.hash);
+
+    const tree = node("100000", [node("330000", [node("330900", [])])]);
+    const { box: box2 } = makeEnv(tree);
+    const [n] = await box2.generate("330900");
+    expect(n.svg).toBeNull();
+    expect(n.hash).toBeNull();
   });
 });

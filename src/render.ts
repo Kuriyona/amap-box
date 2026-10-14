@@ -90,6 +90,152 @@ export function centerRatioViewBox(
   return { minLon: cx - halfLon, maxLon: cx + halfLon, minLat: cy - halfLat, maxLat: cy + halfLat };
 }
 
+/**
+ * 画框推导结果：投影缩放、画布尺寸与原点（`renderMap` 与候选预筛共用）。
+ */
+export interface MapFrame {
+  /** 投影用的纬度余弦（units 所有点平均纬度的 cos）。 */
+  cos0: number;
+  scale: number;
+  W: number;
+  H: number;
+  /** px = originX + lon * cos0 * scale；py = originY - lat * scale。 */
+  originX: number;
+  originY: number;
+  /** 顶部标题带的下移量（`ratio` 补白时非 0）。 */
+  offY: number;
+  /** 标题带高度（`title: false` 时为 0）。 */
+  band: number;
+}
+
+/**
+ * 从内容推导画框（缩放 / 画布 / 原点）。与 `renderMap` 共用同一套取景公式 ——
+ * 出图前的候选预筛要与渲染器的「视图内」判据一致，不能各推一套。
+ * 没有任何点（`units` 全空环）时返回 null。
+ */
+export function mapFrame(input: {
+  units: Unit[];
+  outline: Unit | null;
+  target?: string | null;
+  ratio?: MapRatio;
+  padding?: number;
+  title?: boolean;
+  center?: boolean | "outline" | "target" | number;
+}): MapFrame | null {
+  const sample = input.units.flatMap((u) => u.rings).flat();
+  if (!sample.length) return null;
+  const lat0 = sample.reduce((s, p) => s + p[1], 0) / sample.length;
+  const cos0 = Math.cos((lat0 * Math.PI) / 180);
+  const lon2x = (lon: number) => lon * cos0;
+
+  const worldBBox = (us: Unit[]) => {
+    let x0 = Infinity;
+    let x1 = -Infinity;
+    let y0 = Infinity;
+    let y1 = -Infinity;
+    for (const u of us)
+      for (const ring of u.rings)
+        for (const [lon, lat] of ring) {
+          const x = lon2x(lon);
+          if (x < x0) x0 = x;
+          if (x > x1) x1 = x;
+          if (lat < y0) y0 = lat;
+          if (lat > y1) y1 = lat;
+        }
+    return { x0, x1, y0, y1 };
+  };
+
+  const pad = Math.max(0, input.padding ?? PAD);
+  const band = (input.title ?? true) ? CAPTION_H : 0; // 顶部标题带
+  const r = parseRatio(input.ratio ?? "auto") ?? "auto";
+  const mode = parseCenter(input.center); // false | "outline" | 占比
+  // 目标单元：优先整体轮廓，其次区块
+  const tgt =
+    mode === false
+      ? undefined
+      : input.outline && input.outline.adcode === input.target
+        ? input.outline
+        : input.units.find((u) => u.adcode === input.target);
+
+  let scale: number;
+  let W: number;
+  let H: number;
+  let originX: number;
+  let originY: number;
+  let offY = 0;
+  if (typeof mode === "number" && tgt) {
+    // 方案二：目标居中，目标包围盒长边占画幅长边 mode。画幅固定，上下文超出即裁掉。
+    const tb = worldBBox([tgt]);
+    const tLong = Math.max(tb.x1 - tb.x0, tb.y1 - tb.y0, 1e-9);
+    const fr = ratioFrame(tLong, mode, r);
+    scale = fr.scale;
+    W = fr.drawW + 2 * pad;
+    H = fr.drawH + band + 2 * pad;
+    originX = pad + fr.drawW / 2 - ((tb.x0 + tb.x1) / 2) * scale;
+    originY = band + pad + fr.drawH / 2 + ((tb.y0 + tb.y1) / 2) * scale;
+  } else {
+    // 方案一 / 默认：内容盒居中。方案一取「以目标中心为中心、含最外层轮廓」的对称盒，
+    // 保证轮廓完整可见（代价是目标偏居一角时留白较多）。
+    let vx0: number;
+    let vy1: number;
+    let dx: number;
+    let dy: number;
+    if (mode === "outline" && tgt) {
+      const frame = worldBBox(input.outline ? [...input.units, input.outline] : input.units);
+      const tb = worldBBox([tgt]);
+      const tcx = (tb.x0 + tb.x1) / 2;
+      const tcy = (tb.y0 + tb.y1) / 2;
+      const halfW = Math.max(tcx - frame.x0, frame.x1 - tcx);
+      const halfH = Math.max(tcy - frame.y0, frame.y1 - tcy);
+      vx0 = tcx - halfW;
+      vy1 = tcy + halfH;
+      dx = 2 * halfW;
+      dy = 2 * halfH;
+    } else {
+      const cb = worldBBox(input.units);
+      vx0 = cb.x0;
+      vy1 = cb.y1;
+      dx = cb.x1 - cb.x0;
+      dy = cb.y1 - cb.y0;
+    }
+    scale = MAP_LONG / Math.max(dx, dy); // 长边 -> 1000px
+    const boxW = dx * scale + 2 * pad; // 内容盒（含留白与标题带）
+    const boxH = dy * scale + band + 2 * pad;
+    // 画幅比例：auto 直接用内容盒；给定比例时内容缩放不变，居中后把多余空间作为留白补到画布
+    W = boxW;
+    H = boxH;
+    let offX = 0;
+    if (r !== "auto") {
+      if (boxW / boxH > r) {
+        W = boxW;
+        H = boxW / r;
+      } else {
+        W = boxH * r;
+        H = boxH;
+      }
+      offX = (W - boxW) / 2;
+      offY = (H - boxH) / 2;
+    }
+    originX = offX + pad - vx0 * scale;
+    originY = offY + band + pad + vy1 * scale;
+  }
+  return { cos0, scale, W, H, originX, originY, offY, band };
+}
+
+/** 画框覆盖的经纬度范围：投影后落在画布内的东西一定在这里面。 */
+export function canvasViewBox(frame: MapFrame): {
+  minLon: number;
+  minLat: number;
+  maxLon: number;
+  maxLat: number;
+} {
+  const x0 = (0 - frame.originX) / frame.scale;
+  const x1 = (frame.W - frame.originX) / frame.scale;
+  const y1 = frame.originY / frame.scale;
+  const y0 = (frame.originY - frame.H) / frame.scale;
+  return { minLon: x0 / frame.cos0, maxLon: x1 / frame.cos0, minLat: y0, maxLat: y1 };
+}
+
 /** 待绘制单元，带图内相对层级。 */
 export interface RenderUnit extends Unit {
   depth?: number;
@@ -174,103 +320,11 @@ export function renderMap({
   const bg = colors?.background ?? BG;
   const line = colors?.line ?? LINE;
   const targetFill = colors?.targetFill ?? TARGET_FILL;
-  const sample = units.flatMap((u) => u.rings).flat();
-  if (!sample.length) return null;
-  const lat0 = sample.reduce((s, p) => s + p[1], 0) / sample.length;
-  const cos0 = Math.cos((lat0 * Math.PI) / 180);
-  const lon2x = (lon: number) => lon * cos0;
-
-  const worldBBox = (us: Unit[]) => {
-    let x0 = Infinity;
-    let x1 = -Infinity;
-    let y0 = Infinity;
-    let y1 = -Infinity;
-    for (const u of us)
-      for (const ring of u.rings)
-        for (const [lon, lat] of ring) {
-          const x = lon2x(lon);
-          if (x < x0) x0 = x;
-          if (x > x1) x1 = x;
-          if (lat < y0) y0 = lat;
-          if (lat > y1) y1 = lat;
-        }
-    return { x0, x1, y0, y1 };
-  };
-
+  const frame = mapFrame({ units, outline, target, ratio, padding, title, center });
+  if (!frame) return null;
+  const { cos0, scale, W, H, originX, originY, offY } = frame;
   const pad = Math.max(0, padding);
-  const band = title ? CAPTION_H : 0; // 顶部标题带
-  const r = parseRatio(ratio) ?? "auto";
-  const mode = parseCenter(center); // false | "outline" | 占比
-  // 目标单元：优先整体轮廓，其次区块
-  const tgt =
-    mode === false
-      ? undefined
-      : outline && outline.adcode === target
-        ? outline
-        : units.find((u) => u.adcode === target);
-
-  let scale: number;
-  let W: number;
-  let H: number;
-  let originX: number;
-  let originY: number;
-  let offY = 0;
-  if (typeof mode === "number" && tgt) {
-    // 方案二：目标居中，目标包围盒长边占画幅长边 mode。画幅固定，上下文超出即裁掉。
-    const tb = worldBBox([tgt]);
-    const tLong = Math.max(tb.x1 - tb.x0, tb.y1 - tb.y0, 1e-9);
-    const fr = ratioFrame(tLong, mode, r);
-    scale = fr.scale;
-    W = fr.drawW + 2 * pad;
-    H = fr.drawH + band + 2 * pad;
-    originX = pad + fr.drawW / 2 - ((tb.x0 + tb.x1) / 2) * scale;
-    originY = band + pad + fr.drawH / 2 + ((tb.y0 + tb.y1) / 2) * scale;
-  } else {
-    // 方案一 / 默认：内容盒居中。方案一取「以目标中心为中心、含最外层轮廓」的对称盒，
-    // 保证轮廓完整可见（代价是目标偏居一角时留白较多）。
-    let vx0: number;
-    let vy1: number;
-    let dx: number;
-    let dy: number;
-    if (mode === "outline" && tgt) {
-      const frame = worldBBox(outline ? [...units, outline] : units);
-      const tb = worldBBox([tgt]);
-      const tcx = (tb.x0 + tb.x1) / 2;
-      const tcy = (tb.y0 + tb.y1) / 2;
-      const halfW = Math.max(tcx - frame.x0, frame.x1 - tcx);
-      const halfH = Math.max(tcy - frame.y0, frame.y1 - tcy);
-      vx0 = tcx - halfW;
-      vy1 = tcy + halfH;
-      dx = 2 * halfW;
-      dy = 2 * halfH;
-    } else {
-      const cb = worldBBox(units);
-      vx0 = cb.x0;
-      vy1 = cb.y1;
-      dx = cb.x1 - cb.x0;
-      dy = cb.y1 - cb.y0;
-    }
-    scale = MAP_LONG / Math.max(dx, dy); // 长边 -> 1000px
-    const boxW = dx * scale + 2 * pad; // 内容盒（含留白与标题带）
-    const boxH = dy * scale + band + 2 * pad;
-    // 画幅比例：auto 直接用内容盒；给定比例时内容缩放不变，居中后把多余空间作为留白补到画布
-    W = boxW;
-    H = boxH;
-    let offX = 0;
-    if (r !== "auto") {
-      if (boxW / boxH > r) {
-        W = boxW;
-        H = boxW / r;
-      } else {
-        W = boxH * r;
-        H = boxH;
-      }
-      offX = (W - boxW) / 2;
-      offY = (H - boxH) / 2;
-    }
-    originX = offX + pad - vx0 * scale;
-    originY = offY + band + pad + vy1 * scale;
-  }
+  const lon2x = (lon: number) => lon * cos0;
   // 北向上
   const toPx = ([lon, lat]: [number, number]): Point => [
     originX + lon2x(lon) * scale,

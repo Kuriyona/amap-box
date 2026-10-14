@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { BG, CAPTION_H, CONTEXT_OPACITY_MAX, HOT_TARGET, LINE, MAP_LONG, OUTLINE_STROKE, PAD, renderMap, TARGET_FILL, wrapSvg, type RenderUnit } from "../src/render.js";
+import { bboxHit, bboxOf } from "../src/bbox.js";
+import { BG, CAPTION_H, CONTEXT_OPACITY_MAX, HOT_TARGET, LINE, MAP_LONG, OUTLINE_STROKE, PAD, canvasViewBox, mapFrame, renderMap, TARGET_FILL, wrapSvg, type RenderUnit } from "../src/render.js";
 
 const square = (x: number, s: number) => [
   [120 + x, 30],
@@ -256,6 +257,27 @@ describe("目标居中", () => {
     const b = renderMap({ units: [u], outline: null, caption: "T", center: 0.5 })!;
     expect(b.W).toBeCloseTo(a.W, 6);
     expect(b.H).toBeCloseTo(a.H, 6);
+  });
+});
+
+describe("mapFrame / canvasViewBox", () => {
+  it("视图与 renderMap 一致：近邻命中、远区不命中", () => {
+    const u = unit("杭州市", "330100", 0);
+    const near = unit("邻区", "330200", 1);
+    const far = unit("远区", "330201", 50);
+    const frame = mapFrame({ units: [u], outline: null })!;
+    expect(frame).not.toBeNull();
+    const view = canvasViewBox(frame);
+    expect(bboxHit(bboxOf([near])!, view)).toBe(true);
+    expect(bboxHit(bboxOf([far])!, view)).toBe(false);
+    // 同一套取景：renderMap 的视图内判定与预筛一致
+    const map = renderMap({ units: [u], outline: null, outside: [near, far], caption: "T" })!;
+    expect(map.outside).toBe(1);
+  });
+
+  it("无内容返回 null；空环也返回 null", () => {
+    expect(mapFrame({ units: [], outline: null })).toBeNull();
+    expect(mapFrame({ units: [{ name: "x", adcode: "x", center: [120, 30], rings: [] }], outline: null })).toBeNull();
   });
 });
 

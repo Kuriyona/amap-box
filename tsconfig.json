@@ -3,7 +3,7 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "bundler",
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": ["ES2022", "ES2024.Promise", "DOM", "DOM.Iterable"],
     "types": ["node"],
     "strict": true,
     "declaration": true,
@@ -14,5 +14,5 @@
     "isolatedModules": true,
     "noEmit": true
   },
-  "include": ["src", "tests", "tsdown.config.ts", "vitest.config.ts"]
+  "include": ["src", "tests", "scripts", "tsdown.config.ts", "vitest.config.ts"]
 }

@@ -15,10 +15,10 @@ export interface AmapDistrict {
 
 /**
  * 取数函数：给定完整 URL（已含 key），返回**已解析**的响应对象。
- * 直接透传平台的原生 `fetch` 时记得 `.json()`：
- * `(url) => fetch(url).then((r) => r.json())`。
+ * 第二个参数是可选的中止信号，可直接透传：
+ * `(url, signal) => fetch(url, { signal }).then((r) => r.json())`。
  */
-export type AmapFetch = (url: string) => unknown | Promise<unknown>;
+export type AmapFetch = (url: string, signal?: AbortSignal) => unknown | Promise<unknown>;
 
 /**
  * 键值缓存。值一律是字符串（本库内部用 JSON 序列化），
@@ -37,6 +37,8 @@ export interface AmapBoxOptions {
   fetch: AmapFetch;
   /** 缓存实现。 */
   cache: AmapCache;
+  /** 缺省中止信号，`generate` / `resolve` / `ready` 都生效（可被各调用的 `signal` 覆盖）。 */
+  signal?: AbortSignal;
 }
 
 /** 画幅比例：`"auto"`（按内容）或正数宽高比 W/H；也接受 `"16:9"` 这样的字符串。 */
@@ -97,6 +99,10 @@ export interface SpanOptions extends LayoutOptions {
   outsideSameLevel?: boolean;
   /** 忽略缓存重新拉取（含重建全国索引）。 */
   refresh?: boolean;
+  /** 本轮最多新增几次取数（缓存未命中才计）；跑满即正常返回，未跑完的图 `svg: null` 并在 `notes` 里说明。默认不限。 */
+  maxFetches?: number;
+  /** 本次调用的中止信号（优先于构造参数的 `signal`）；已中止时抛 `AbortError`。 */
+  signal?: AbortSignal;
 }
 
 /** 行政区引用（名称 / adcode / 级别）。 */
@@ -155,12 +161,19 @@ export interface PerfStats {
   cacheMisses: string[];
 }
 
+/** 一条提示：`level` 区分过程信息与需要处理的警告。 */
+export interface Note {
+  /** `"info"` = 过程说明；`"warn"` = 降级 / 限流 / 截断 / 预算用尽。 */
+  level: "info" | "warn";
+  text: string;
+}
+
 /** `resolve()` 的返回值。 */
 export interface ResolveResult {
   /** 命中的行政区（AMap 树里的节点）。 */
   regions: AmapDistrict[];
   /** 过程中的提示/警告。 */
-  notes: string[];
+  notes: Note[];
 }
 
 /** `generate()` 单张图的结果。 */
@@ -177,6 +190,8 @@ export interface GenerateResult {
   file: string;
   /** SVG 文本；无法出图时为 `null`。 */
   svg: string | null;
+  /** `svg` 的 sha256（小写十六进制）；`svg` 为 `null` 时为 `null`。用平台自带 WebCrypto（`crypto.subtle`）计算。 */
+  hash: string | null;
   /** 元数据；与 SVG 里内嵌的 `<metadata>` 元素同源（后者是其 JSON 序列化）。 */
   meta: MapMeta;
   /** 这张图出的过程中缓存命中/未命中的键。 */
@@ -188,5 +203,5 @@ export interface GenerateResult {
   /** 画出的外部轮廓区块数（`outside` 启用且视图内有同级相邻区域时 > 0）。 */
   neighbors: number;
   /** 这张图的提示/警告。解析层（索引构建、匹配上限、限流）的提示只在第一个结果里出现一次。 */
-  notes: string[];
+  notes: Note[];
 }

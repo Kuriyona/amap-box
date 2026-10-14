@@ -34,6 +34,7 @@ export type {
   MapRatio,
   ResolveResult,
   GenerateResult,
+  Note,
 } from "./types.js";
 export {
   parsePolyline,

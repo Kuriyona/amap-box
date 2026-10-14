@@ -10,7 +10,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AmapBox } from "../index.js";
-import { diskCache, loadKey, nodeFetch } from "./common.js";
+import type { MapRatio } from "../types.js";
+import { diskCache, loadKey, nodeFetch, renderNameTemplate } from "./common.js";
 
 const USAGE = `用法: amap-box <行政区名|adcode> [选项]
 选项:
@@ -29,8 +30,11 @@ const USAGE = `用法: amap-box <行政区名|adcode> [选项]
   --center [outline|target|N]  让目标居中 (默认不居中，内容居中)：
                         outline = 目标居中且整体轮廓完整；target = 目标占画幅长边 0.5；
                         N(0<N<=1) = 目标占画幅长边比例（target/N 隐含目标同级外部轮廓）
-  --out <dir>    输出目录            (默认 out)
+  --out <dir>    输出目录            (默认 out；「-」= 写到 stdout，只允许单个命中)
   --cache <dir>  边界+索引缓存目录     (默认 districts)
+  --max-fetches <N>  本轮最多新增几次取数（缓存未命中才计；跑满即停，未跑完的图不写）
+  --key <KEY>    高德 key（优先于 AMAP_KEY 与 .env）
+  --name <template>  文件名模板：{name} / {adcode} / {up} / {down}（未以 .svg 结尾自动补；多命中同名会互相覆盖）
   --refresh      忽略缓存，重新拉取（含重建全国索引）
 层级: 国家级(0) -> 省级(1) -> 地级(2) -> 县级(3)
 索引: <cache>/index.json 首次运行一次请求生成，之后查找/层级只走它`;
@@ -52,6 +56,9 @@ async function main() {
     center?: string;
     up?: string;
     down?: string;
+    maxFetches?: string;
+    key?: string;
+    name?: string;
   } = {
     out: "out",
     cache: "districts",
@@ -81,6 +88,9 @@ async function main() {
     else if (a === "--no-target-bg") flags.noTargetBg = true;
     else if (a === "--ratio") flags.ratio = argv[++i];
     else if (a === "--padding") flags.padding = argv[++i];
+    else if (a === "--max-fetches") flags.maxFetches = argv[++i];
+    else if (a === "--key") flags.key = argv[++i];
+    else if (a === "--name") flags.name = argv[++i];
     else if (a === "--center") {
       const next = argv[i + 1];
       if (next !== undefined && !next.startsWith("-") && /^(outline|target|\d+(?:\.\d+)?)$/i.test(next)) {
@@ -129,12 +139,12 @@ async function main() {
   }
 
   // 版式：比例 / 留白 / 标题
-  let ratio: number | "auto" | undefined;
+  let ratio: MapRatio | undefined;
   if (flags.ratio !== undefined) {
     const v = String(flags.ratio).trim().toLowerCase();
     const wh = /^(\d+(?:\.\d+)?):(\d+(?:\.\d+)?)$/.exec(v);
     if (v === "auto") ratio = "auto";
-    else if (wh && Number(wh[1]) > 0 && Number(wh[2]) > 0) ratio = Number(wh[1]) / Number(wh[2]);
+    else if (wh && Number(wh[1]) > 0 && Number(wh[2]) > 0) ratio = v as MapRatio; // 原样写进 meta.span.ratio
     else if (/^\d+(?:\.\d+)?$/.test(v) && Number(v) > 0) ratio = Number(v);
     else {
       console.error(`--ratio 只接受 auto、W:H 或正数，收到: ${flags.ratio}\n\n${USAGE}`);
@@ -150,6 +160,15 @@ async function main() {
       process.exit(2);
     }
   }
+  let maxFetches: number | undefined;
+  if (flags.maxFetches !== undefined) {
+    const v = String(flags.maxFetches).trim();
+    if (/^\d+$/.test(v)) maxFetches = Number(v);
+    else {
+      console.error(`--max-fetches 只接受非负整数，收到: ${flags.maxFetches}\n\n${USAGE}`);
+      process.exit(2);
+    }
+  }
   let center: boolean | "outline" | "target" | number | undefined;
   if (flags.center !== undefined) {
     const v = String(flags.center).trim().toLowerCase();
@@ -162,11 +181,15 @@ async function main() {
     }
   }
 
-  const KEY = loadKey();
+  const KEY = loadKey(flags.key);
   if (!KEY) {
     console.error("缺少高德 key：设置环境变量 AMAP_KEY，或在 .env 写入 KEY=...");
     process.exit(2);
   }
+
+  const toStdout = flags.out === "-";
+  const log = (s: string) => (toStdout ? console.error(s) : console.log(s));
+  if (toStdout && flags.name !== undefined) console.error("! --out - 忽略 --name");
 
   const box = new AmapBox({ Key: KEY, fetch: nodeFetch, cache: diskCache(flags.cache) });
 
@@ -184,6 +207,7 @@ async function main() {
       targetLabels: !flags.noTargetLabel,
       targetBackground: !flags.noTargetBg,
       center,
+      maxFetches,
       refresh: flags.refresh,
     });
   } catch (e) {
@@ -191,17 +215,34 @@ async function main() {
     process.exit(1);
   }
 
-  mkdirSync(flags.out, { recursive: true });
+  if (toStdout && generated.length > 1) {
+    console.error(`--out - 只支持单个命中（本次 ${generated.length} 个），请改用 --out <dir>`);
+    process.exit(2);
+  }
+
+  if (!toStdout) mkdirSync(flags.out, { recursive: true });
   let written = 0;
+  const seen = new Set<string>();
   for (const r of generated) {
-    console.log(`· ${r.query.name} (${r.query.level} ${r.query.adcode})`);
-    for (const n of r.notes) console.error(`  ${n}`);
-    if (!r.svg) continue;
-    const file = join(flags.out, r.file);
-    writeFileSync(file, r.svg);
+    log(`· ${r.query.name} (${r.query.level} ${r.query.adcode})`);
+    for (const n of r.notes) console.error(n.level === "warn" ? `  ! ${n.text}` : `  ${n.text}`);
+    if (!r.svg) {
+      if (toStdout) {
+        console.error(`${r.query.name} 没有出图`);
+        process.exit(1);
+      }
+      continue;
+    }
+    if (toStdout) {
+      process.stdout.write(r.svg);
+      log(`  已输出到 stdout（${r.svg.length} 字节）`);
+      written++;
+      continue;
+    }
     const bits = [
       `往上 ${r.up} 级 / 往下 ${r.down} 级`,
       `${r.blocks} 个区块${r.outline ? " + 整体轮廓" : ""}${r.neighbors ? ` + ${r.neighbors} 个外部轮廓` : ""}`,
+      `新增取数 ${r.perf.cacheMisses.length}${r.perf.cacheHits.length ? `（缓存命中 ${r.perf.cacheHits.length}）` : ""}`,
     ];
     if (flags.ratio !== undefined) bits.push(`画幅 ${flags.ratio}`);
     if (flags.padding !== undefined) bits.push(`留白 ${flags.padding}px`);
@@ -211,7 +252,14 @@ async function main() {
     if (flags.noTargetBg) bits.push("无目标背景");
     if (flags.center !== undefined) bits.push(`目标居中 ${flags.center}`);
     if (flags.outsideSameLevel) bits.push("含目标同级轮廓");
-    console.log(`  已写入 ${file}  （${bits.join("；")}）`);
+    const file =
+      flags.name !== undefined
+        ? renderNameTemplate(flags.name, { name: r.landed.name, adcode: r.landed.adcode, up: r.up, down: r.down })
+        : r.file;
+    if (seen.has(file)) console.error(`! --name 对多个命中产出同名文件 ${file}，后者覆盖前者`);
+    seen.add(file);
+    writeFileSync(join(flags.out, file), r.svg);
+    log(`  已写入 ${file}  （${bits.join("；")}）`);
     written++;
   }
 

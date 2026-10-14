@@ -25,8 +25,8 @@ import { AmapBox } from "@kuriyona/amap-box";
 
 const box = new AmapBox({
   Key: process.env.AMAP_KEY!,
-  // 给定完整 URL（已含 key），返回**已解析**的响应对象
-  fetch: (url) => fetch(url).then((r) => r.json()),
+  // 给定完整 URL（已含 key），返回**已解析**的响应对象；第二个参数可透传
+  fetch: (url, signal) => fetch(url, { signal }).then((r) => r.json()),
   // 键值缓存，值一律是字符串（键："index" 与各 <adcode>）
   cache: {
     read: (key) => storage[key] ?? null,
@@ -38,9 +38,9 @@ const maps = await box.generate("杭州市", { up: 1, down: 1 });
 for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张没画出来
 ```
 
-- **构造参数**（对象形式，只有这三个）：`Key`（string）、`fetch`（`(url) => object`）、`cache`（`{ read(key), write(key, value) }`，read/write 允许同步或返回 Promise）。
-- `resolve(keyword, refresh?)` → `{ regions, notes }`：名称/adcode → 命中的行政区（索引优先，未命中回落在线查询）。
-- `generate(keyword, { up?, down?, outside?, outsideSameLevel?, ratio?, padding?, title?, contextLabels?, targetLabels?, targetBackground?, colors?, center?, refresh? })` → `GenerateResult[]`：每个命中一张图。
+- **构造参数**：`Key`（string）、`fetch`（`(url, signal?) => object`，第二个参数是可选中止信号）、`cache`（`{ read(key), write(key, value) }`，read/write 允许同步或返回 Promise）、`signal?`（`AbortSignal`，缺省中止信号，`generate` / `resolve` / `ready` 都生效）。
+- `resolve(keyword, refresh?)` → `{ regions, notes }`：名称/adcode → 命中的行政区（索引优先，未命中回落在线查询）；`notes` 是 `{ level, text }[]`。
+- `generate(keyword, { up?, down?, outside?, outsideSameLevel?, ratio?, padding?, title?, contextLabels?, targetLabels?, targetBackground?, colors?, center?, maxFetches?, signal?, refresh? })` → `GenerateResult[]`：每个命中一张图。
   - `up` 默认 `0`（`"max"` = 到国家级，超过目标深度会被夹到深度）；`down` 只允许 `0 | 1`，默认 `0`。
   - `outside` 默认 `false`：拓展外部轮廓，把「最外层级」（`R(d-up)`，如 杭州 u1 / 浙江 u0 都是浙江省）同级、
     落在当前视图内的其他行政区轮廓也画出来（更细更淡、不加标签、不往下细分、不改变缩放）。
@@ -58,7 +58,7 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
     `R(d-up)` 完整可见（目标偏居轮廓一角时留白较多；目标即轮廓时与默认一致）；`"target"` = 占比模式默认 `0.5`；
     数字（`0 < N <= 1`）= 目标包围盒长边占画幅可绘区长边的比例，目标质心居中、上下文超出画幅即裁掉，
     并默认开启 `outsideSameLevel`（仅在其可用条件满足时）。
-  - 每项：`query` / `landed`（实际落到的行政区）、`up` / `down`（解析后）、`file`（建议文件名）、`svg`（文本，失败为 `null`）、`blocks`、`outline`、`neighbors`（画出的外部轮廓区块数）、`notes`。
+  - 每项：`query` / `landed`（实际落到的行政区）、`up` / `down`（解析后）、`file`（建议文件名）、`svg`（文本，失败为 `null`）、`hash`（`svg` 的 sha256，`svg` 为 `null` 时为 `null`，用 `crypto.subtle` 算）、`blocks`、`outline`、`neighbors`（画出的外部轮廓区块数）、`notes`（`{ level, text }[]`，`level` 为 `"info"` 或 `"warn"`）。
   - `meta`：图的元数据（`generator` 含版本、`source`、`attribution`、`query` / `landed`、`chain` 层级链、`span` 实际跨度与版式），
     同一份对象会 `JSON.stringify` 后内嵌进 SVG 开头的 `<metadata>` 元素（XML 转义），让 SVG 自带出处；**不含时间戳**，
     保证同一参数出图逐字节一致（review 页按哈希找等价组合依赖这点）。
@@ -66,18 +66,19 @@ for (const m of maps) writeFile(m.file, m.svg!); // m.svg 为 null 表示这张�
     只记真的读了注入缓存的调用；`refresh` 一律记未命中；索引已在本实例内存里复用时两张列表都不出现。
     解析层（索引）那次统计并进第一张图，与 `notes` 的处理一致。
   - 找不到匹配 → `throw`；某一张画不出来 → 该项 `svg: null` + `notes` 说明，不中断其余。
+  - `maxFetches`（非负整数）/ `signal`（`AbortSignal`）：本轮取数预算与取消。一次逻辑取数记 1（限流重试不计），跑满即正常返回、未跑完的图 `svg: null` + warn；已中止抛 `AbortError`。缓存即进度记录，中断/超时后重入复用已拉边界。
   - 解析层提示（索引构建、匹配上限、限流重试）只挂在第一个结果上，避免多命中时重复。
 - `ready(refresh?)`：只预热全国索引。
-- 另有纯函数导出：`svgFileName`、`parsePolyline` / `toUnit` / `signedArea` / `centroid` / `pointInRing` / `simplify`、`renderMap` / `wrapSvg` / `parseRatio` / `parseCenter` / `centerRatioViewBox`。
+- 另有纯函数导出：`svgFileName`、`parsePolyline` / `toUnit` / `signedArea` / `centroid` / `pointInRing` / `simplify`、`renderMap` / `wrapSvg` / `parseRatio` / `parseCenter` / `centerRatioViewBox` / `mapFrame` / `canvasViewBox`。
 
 ## CLI 运行
 
 ```bash
-bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outside] [--ratio auto|W:H|N] [--padding N] [--no-title] [--no-context-labels] [--no-target-label] [--no-target-bg] [--center outline|target|N] [--out <dir>] [--cache <dir>] [--refresh]
+bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outside] [--ratio auto|W:H|N] [--padding N] [--no-title] [--no-context-labels] [--no-target-label] [--no-target-bg] [--center outline|target|N] [--key KEY] [--name <tpl>] [--max-fetches N] [--out <dir|->] [--cache <dir>] [--refresh]
 # 或装好之后：amap-box <行政区名|adcode> [选项]
 ```
 
-- Key 来源：环境变量 `AMAP_KEY`，或仓库根目录 `.env` 里的 `KEY=...`
+- Key 来源：`--key <KEY>`，否则环境变量 `AMAP_KEY`，否则仓库根目录 `.env` 里的 `KEY=...`
 - 输出目录默认 `out/`，边界+索引缓存默认 `districts/`
 
 | 选项 | 含义 | 默认 |
@@ -94,7 +95,10 @@ bun src/cli/gen_svg.ts <行政区名|adcode> [--up N|max] [--down 0|1] [--outsid
 | `--no-target-label` | 不画目标节点自身的标签 | — |
 | `--no-target-bg` | 不给目标节点所在区域填充背景高亮 | — |
 | `--center [outline\|target\|N]` | 让目标居中：`outline` = 目标居中且整体轮廓完整；`target` = 目标占画幅长边 `0.5`；`N`（`0<N<=1`）= 目标占画幅长边比例（`target`/`N` 隐含 `--outside-same-level`） | — |
-| `--out` / `--cache` | 输出目录 / 边界+索引缓存目录 | `out` / `districts` |
+| `--out` / `--cache` | 输出目录（`-` = 写到 stdout，只允许单个命中，日志走 stderr） / 边界+索引缓存目录 | `out` / `districts` |
+| `--key <KEY>` | 高德 key（优先于 `AMAP_KEY` 与 `.env`） | — |
+| `--name <template>` | 文件名模板：`{name}` / `{adcode}` / `{up}` / `{down}`（未以 `.svg` 结尾自动补；多命中同名会互相覆盖） | — |
+| `--max-fetches <N>` | 本轮最多新增几次取数（缓存未命中才计；跑满即停，未跑完的图不写） | — |
 | `--refresh` | 忽略缓存重新拉取（含重建全国索引） | — |
 
 CLI 的磁盘缓存把键映射成 `<cache>/<key>.json`（键 `index` 与 `<adcode>`），与库内缓存布局一致。
@@ -224,6 +228,16 @@ EOF
 bun src/cli/review.ts   # -> review/ 40 张 + review.html，浏览器打开逐个看/写评语
 ```
 
+另两条针对本次改动：
+
+```bash
+bun run bbox --check    # 用 districts/ 缓存的边界逐项复算内置 bbox 表，全绿
+bun run bbox            # 重建表（约 280 次接口；行政区划变动后重跑）
+```
+
+**预筛不改变出图**：`outside` / `outsideSameLevel` 的候选预筛只该省掉「本来就不会画」的候选，所以同一份缓存下
+改前改后的 SVG 必须**逐字节一致** —— 出两份快照 `cmp` 比对（预筛太狠 = 差异在“少了某个外部轮廓”）。
+
 必须覆盖到的边界行为：
 
 - `--up 5`（超过目标深度）→ 打印警告并把 `up` 夹到 `d`
@@ -265,8 +279,9 @@ bun src/cli/review.ts --out review --html review.html --cache districts --refres
 - **直辖市是三级**：AMap 的真实树是 `北京市 → 北京城区(110100) → 各区`，所以北京的区目标 `d=3`，`--up max` 会带出 `北京城区` 这一级。
 - **目标可能对不上自身节点**：个别行政区（如 `711113 西湖乡`）在层级树里匹配不到，会退到实际落到的那个行政区（`花莲县`）并打印提示。
 - **`--down` 最多 1**：再往下是几千个区块、几千次请求（接口 QPS 有限，超了返回 `CUQPS_HAS_EXCEEDED_THE_LIMIT`），不现实。
-- **`--outside` 会取回同级的全部候选**：要判断邻居是否落在视图内，必须先拿到它们的边界，所以会额外拉「最外层级」
-  同级的所有行政区（省级最多 34 个）；走缓存，第二次不再请求。
+- **`outside` 候选先按内置 bbox 预筛**：随包内置一张省/地级 bbox 表（`src/data/bbox.ts`，`bun run bbox` 生成、随包发布、
+  与 `refresh` 无关），在拉边界前先按包围盒剔掉明显在视图外的候选；表里没有的 adcode（县级候选、新设候选）不预筛，
+  退化为全拉，保守。实测 `--up 1 --down 0 --ratio 1 --outside-same-level`（杭州）96 → 34 请求。
 - **必须抽稀**：国家级边界原始 3.4MB / 2302 个环，34 个省级合计约 15MB。`simplify()`（道格拉斯-普克，0.75px）+ 丢弃小于 2px² 的环是必需的，不是优化。
 - **缓存**：`districts/index.json`（全国索引，首次运行一次请求拿到，见上）+ `districts/<adcode>.json`
   （该区块自身边界，`subdistrict=0`）。`-tree.json` 已废弃 —— 层级链改由索引回答。
@@ -283,9 +298,12 @@ bun src/cli/review.ts --out review --html review.html --cache districts --refres
 | `src/types.ts` | 公共类型：`AmapBoxOptions` / `AmapFetch` / `AmapCache` / `SpanOptions` / `GenerateResult` … |
 | `src/amap-box.ts` | `AmapBox` 类：API 取数（`apiQuery` + 限流退避）、缓存读写、全国索引、`resolve` / `generate`；`svgFileName` |
 | `src/geometry.ts` | 纯几何：`parsePolyline` / `toUnit` / `signedArea` / `centroid` / `pointInRing` / `simplify` |
-| `src/render.ts` | `renderMap`（投影 → 抽稀 → 分层线宽 → 同级统一字号 → 版式/画幅 → 拼 SVG）与 `wrapSvg`、`parseRatio` |
+| `src/bbox.ts` | `bboxOf` / `bboxHit` + `builtinBBox`（查内置表，缺失返回 null） |
+| `src/data/bbox.ts` | 内置省/地级经纬度包围盒表（`bun run bbox` 生成，勿手改） |
+| `src/render.ts` | `renderMap`（投影 → 抽稀 → 分层线宽 → 同级统一字号 → 版式/画幅 → 拼 SVG）与 `wrapSvg`、`parseRatio`、`mapFrame` / `canvasViewBox`（画框推导，渲染与候选预筛共用） |
 | `src/index.ts` | 公共导出入口 |
-| `src/cli/common.ts` | CLI 共用：`loadKey` / `diskCache` / `nodeFetch` |
+| `scripts/gen-bbox.ts` | 生成 `src/data/bbox.ts`（dev 专用，不发布；`--check` 校验） |
+| `src/cli/common.ts` | CLI 共用：`loadKey` / `renderNameTemplate` / `diskCache` / `nodeFetch` |
 | `src/cli/gen_svg.ts` | 出图 CLI（解析跨度参数、写文件） |
 | `src/cli/review.ts` | 审阅页 CLI（`gen` → 写 `<out>` → 拼页面） |
 | `src/cli/review-page.ts` | 审阅页 HTML 模板 |

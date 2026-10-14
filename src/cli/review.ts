@@ -14,7 +14,6 @@
  *
  * 出图全走 `AmapBox` 本身，所以缓存、索引、命名规则都跟正式出图完全一致。
  */
-import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, sep } from "node:path";
 import { AmapBox } from "../index.js";
@@ -26,12 +25,13 @@ const USAGE = `用法: amap-box-review [目标...] [选项]
   --out <dir>    SVG 输出目录        (默认 review)
   --html <file>  审阅页              (默认 review.html；图片按 <out> 相对它定位)
   --cache <dir>  边界+索引缓存目录    (默认 districts)
+  --key <KEY>    高德 key（优先于 AMAP_KEY 与 .env）
   --refresh      忽略缓存重新出图
 每个目标展开 up ∈ [0..d] × down ∈ {0,1} × outside ∈ {off,on}（outside 变体文件名尾部加 -o）
 不带目标时用基准四个层级: ${DEFAULTS.join(" / ")}`;
 
 async function main() {
-  const flags = { out: "review", html: "review.html", cache: "districts", refresh: false };
+  const flags = { out: "review", html: "review.html", cache: "districts", refresh: false, key: undefined as string | undefined };
   const targets: string[] = [];
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {
@@ -39,6 +39,7 @@ async function main() {
     if (a === "--out") flags.out = argv[++i];
     else if (a === "--html") flags.html = argv[++i];
     else if (a === "--cache") flags.cache = argv[++i];
+    else if (a === "--key") flags.key = argv[++i];
     else if (a === "--refresh") flags.refresh = true;
     else if (a === "-h" || a === "--help") {
       console.log(USAGE);
@@ -50,7 +51,7 @@ async function main() {
   }
   if (!targets.length) targets.push(...DEFAULTS);
 
-  const KEY = loadKey();
+  const KEY = loadKey(flags.key);
   if (!KEY) {
     console.error("缺少高德 key：设置环境变量 AMAP_KEY，或在 .env 写入 KEY=...");
     process.exit(2);
@@ -84,8 +85,8 @@ async function main() {
         paths: (r.svg.match(/<path /g) ?? []).length,
         labels: (r.svg.match(/text-anchor="middle"/g) ?? []).length,
         cmd: `amap-box ${target} --up ${up} --down ${down}${outside ? " --outside" : ""}`,
-        warn: r.notes,
-        hash: createHash("sha1").update(r.svg).digest("hex"),
+        warn: r.notes.map((n) => (n.level === "warn" ? "⚠ " : "") + n.text),
+        hash: r.hash!,
       });
     }
     if (!items.length) {
